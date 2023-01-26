@@ -64,7 +64,7 @@ J9Segment::SegmentType determineSegmentType(const string& line)
       }
    return J9Segment::UNKNOWN;
    }
-   
+
 void ThreadStack::print(std::ostream& os) const
    {
    os << " ThreadName=" << setfill(' ') << setw(16) << _threadName << std::hex <<
@@ -185,15 +185,26 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
             // 1STHEAPREGION  0x0000000000561550 0x0000000000580000 0x0000000030570000 0x000000002FFF0000 Generational/Tenured Region
             // or
             // 1STHEAPSPACE   0x000002302F2E94A0 0x00000000BFF80000 0x00000000FFF80000 0x0000000040000000 Flat
+            // However the following is normal for gencon
+            // 1STHEAPSPACE   0x00007F1530158350         --                 --                 --         Generational
             vector<string> tokens;
             tokenize(line, tokens);
             if (tokens.size() < 6)
                {
                cerr << "Have found " << tokens.size() << " instead of 6-7 at line " << lineNo << endl; exit(-1);
                }
+            if (tokens[0] == "1STHEAPSPACE" && tokens[5] == "Generational")
+               {
+               // Skip this line because it has no address information
+               continue;
+               }
             unsigned long long id = hex2ull(tokens[1]);
             unsigned long long startAddr = hex2ull(tokens[2]);
             unsigned long long endAddr = hex2ull(tokens[3]);
+            if (id == HEX_CONVERT_ERROR || startAddr == HEX_CONVERT_ERROR || endAddr == HEX_CONVERT_ERROR)
+               {
+               cerr << "HEX_CONVERT_ERROR in javacore at line:" << lineNo << " : " << line << std::endl;
+               }
             segments.push_back(J9Segment(id, startAddr, endAddr, segmentType, 0));
             }
          else if (line.find("1STSEGTYPE", 0) != std::string::npos)

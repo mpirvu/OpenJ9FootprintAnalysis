@@ -25,6 +25,7 @@
 #include <iostream>
 #include <cstdlib> // for exit
 #include "Util.hpp"
+#include <stdexcept>
 
 using namespace std;
 
