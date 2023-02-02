@@ -132,7 +132,7 @@ Private_Dirty:        0 kB
 Swap:                 0 kB
 Pss:                 12 kB
 
-In Other cases (LinuxPPC LE) I have seen 
+In Other cases (LinuxPPC LE) I have seen
 10000000-10010000 r-xp 00000000 fc:03 2891694                            /home/dsouzai/sdks/pxl6470_27sr1-20140411_01/jre/bin/java
 Size:                 64 kB
 Rss:                  64 kB
@@ -156,8 +156,8 @@ VmFlags: rd ex mr mw me dw    ==> This is a new field that doesn't have the form
 //---------------------------------------------------------------
 int parseSmapsMainLine(string line, SmapEntry &entry)
    {
-   try 
-      {   
+   try
+      {
       // Line starts with an address range
       std::cmatch result; //start    -  end        protection     offset      device major:minor   inode     file
       std::regex pattern("([0-9a-f]+)-([0-9a-f]+) (\\S\\S\\S\\S) ([0-9a-f]+) ([0-9a-f]+:[0-9a-f]+) (\\d+)\\s*(\\S*)");
@@ -178,7 +178,7 @@ int parseSmapsMainLine(string line, SmapEntry &entry)
       } catch (std::regex_error& e) {
          if (e.code() == std::regex_constants::error_badrepeat)
             std::cerr << "Repeat was not preceded by a valid regular expression.\n";
-         else 
+         else
             std::cerr << "Error using regex\n";
          return -1;
       } // end catch

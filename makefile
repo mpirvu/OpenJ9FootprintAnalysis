@@ -1,7 +1,7 @@
 CPP_FILES := $(wildcard src/*.cpp)
 OBJ_FILES := $(addprefix obj/,$(notdir $(CPP_FILES:.cpp=.o)))
-CC_FLAGS := -Wall -std=c++11 -O2
-LD_FLAGS := 
+CC_FLAGS := -Wall -std=c++11 -O2 -g
+LD_FLAGS :=
 #DEBUG = 1
 TARGET = footprintAnalysis.linux
 $(TARGET): $(OBJ_FILES)

@@ -33,7 +33,7 @@
 using namespace std;
 
 
-
+// T can be either a J9Segment or a CallSite
 template <typename MAPENTRY, typename T>
 void annotateMapWithSegments(std::vector<MAPENTRY>&maps, const std::vector<T>& segments)
    {
@@ -65,7 +65,7 @@ void annotateMapWithThreadStacks(std::vector<MAPENTRY>&maps, std::vector<ThreadS
          {
          if (stackRegion->disjoint(map->getAddrRange()))
             continue;
-         // A stackRegion usually spans two smaps: one for the stack guard 
+         // A stackRegion usually spans two smaps: one for the stack guard
          // which is protected to R/W and one for the stack itself
          // We want to cover the entire stack guard with part of the thread stack and
          // cover entirely or partially the next smap with the remaining of the thread
@@ -234,7 +234,7 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps)
          }
 
       // Thread stacks
-      if (crtMap->isMapForThreadStack()) 
+      if (crtMap->isMapForThreadStack())
          {
          virtualSize[STACK] += crtMap->size();
          rssSize[STACK] += crtMap->getResidentSize() << 10;
@@ -361,7 +361,7 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps)
                else // callsites
                   {
                   // Theoretically we could handle these cases as well, but it's unlikely they occur
-                  smapCategory = UNKNOWN; 
+                  smapCategory = UNKNOWN;
                   break;
                   }
                }
@@ -405,18 +405,18 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps)
    // Take all elements from the hashtable and put them into a vector
    vector<PairStringULL> vectorWithDlls(dllCollection.cbegin(), dllCollection.cend());
 
-   
+
    // Sort the vector using a custom comparator (lambda) that knows how to
    // compare pairs (want to sort based on value of the map entry)
    //
    sort(vectorWithDlls.begin(), vectorWithDlls.end(),
-        [](decltype(vectorWithDlls)::const_reference p1, decltype(vectorWithDlls)::const_reference p2) 
-           { return p1.second > p2.second; } // compare using the second element of the pair  
+        [](decltype(vectorWithDlls)::const_reference p1, decltype(vectorWithDlls)::const_reference p2)
+           { return p1.second > p2.second; } // compare using the second element of the pair
        );
 
    // print the most expensive entries
    cout << "\n RSS of dlls\n";
-   for_each(vectorWithDlls.cbegin(), vectorWithDlls.cend(), 
+   for_each(vectorWithDlls.cbegin(), vectorWithDlls.cend(),
             [](decltype(vectorWithDlls)::const_reference element)
                 {cout << dec << setw(8) << (element.second >> 10) << " KB   " << element.first << endl; }
            );
@@ -444,17 +444,17 @@ int main(int argc, char* argv[])
    // Verify number of arguments
    if (argc < 2)
       error("Need at least one argument: smaps file, javacore and callsites are optional");
-   
+
    // Read the smaps file
    vector<MapEntry> sMaps;
 #ifdef WINDOWS_FOOTPRINT
    readVmmapFile(argv[1], sMaps);
 #else
-   readSmapsFile(argv[1], sMaps);  
+   readSmapsFile(argv[1], sMaps);
 #endif
-   
 
-   
+
+
    //===================== Javacore processing ============================
    vector<J9Segment> segments; // must not become out-of-scope until I am done with the maps
    vector<ThreadStack> threadStacks;
@@ -462,18 +462,18 @@ int main(int argc, char* argv[])
       {
       // Read the javacore file
       readJavacore(argv[2], segments, threadStacks);
-#ifdef DEBUG   
+#ifdef DEBUG
       // let's print all segments
       cout << "Print segments:\n";
       for (vector<J9Segment>::iterator it = segments.begin(); it != segments.end(); ++it)
          cout << *it << endl;
-#endif       
-      
+#endif
+
       // Annotate maps with j9segments
       annotateMapWithSegments(sMaps, segments);
       annotateMapWithThreadStacks(sMaps, threadStacks);
       }
-   
+
    //======================== Callsites processing =============================
    vector<CallSite> callSites; // must not become out-of-scope until I am done with the maps
    if (argc >= 4)
@@ -484,7 +484,7 @@ int main(int argc, char* argv[])
       // Annotate the smaps file with callsites
       annotateMapWithSegments(sMaps, callSites);
       }
-     
+
    // print results one by one
    for (vector<MapEntry>::const_iterator map = sMaps.begin(); map != sMaps.end(); ++map)
       {
