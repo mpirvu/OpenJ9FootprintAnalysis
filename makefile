@@ -1,21 +1,44 @@
-CPP_FILES := $(wildcard src/*.cpp)
-OBJ_FILES := $(addprefix obj/,$(notdir $(CPP_FILES:.cpp=.o)))
-CC_FLAGS := -Wall -std=c++11 -O2 -g
-LD_FLAGS :=
-#DEBUG = 1
-TARGET = footprintAnalysis.linux
-$(TARGET): $(OBJ_FILES)
-	g++ $(LD_FLAGS) -o $@ $^
+SOURCEDIR = src
+OBJDIR = obj
 
+# List of sources
+SOURCES := $(wildcard $(SOURCEDIR)/*.cpp)
 
-obj/%.o: src/%.cpp
-	g++ $(CC_FLAGS) -c -o $@ $<
-all: $(TARGET)
+# List of objects
+OBJECTS := $(SOURCES:$(SOURCEDIR)/%.cpp=$(OBJDIR)/%.o)
 
+# List of dependencies
+DEPS := $(OBJECTS:.o=.d)
+
+# Compiler
+CC = g++
+
+# Compiler flags
+CFLAGS = -std=c++11 -Wall -O2 -g
+
+# Linker flags
+LDFLAGS =
+
+# Output
+EXE = footprintAnalysis.linux
+
+# Default rule
+$(EXE): $(OBJECTS)
+	$(CC) $(CFLAGS) $(LDFLAGS) $^ -o $@
+
+# Compile rule
+$(OBJDIR)/%.o: $(SOURCEDIR)/%.cpp
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Rule for generating dependencies
+$(OBJDIR)%.d: $(SRCDIR)%.cpp
+	@$(CC) $(CFLAGS)
+
+# Clean rule
 clean:
-	$(RM) $(TARGET) $(OBJ_FILES)
+	rm -f $(EXE) $(OBJECTS) $(DEPS)
 
 # Automatic dependency graph generation
-CC_FLAGS += -MMD
--include $(OBJFILES:.o=.d)
-
+CFLAGS += -MMD
+-include $(DEPS)
