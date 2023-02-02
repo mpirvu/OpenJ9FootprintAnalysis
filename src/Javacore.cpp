@@ -204,6 +204,7 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
             if (id == HEX_CONVERT_ERROR || startAddr == HEX_CONVERT_ERROR || endAddr == HEX_CONVERT_ERROR)
                {
                cerr << "HEX_CONVERT_ERROR in javacore at line:" << lineNo << " : " << line << std::endl;
+               exit(-1);
                }
             segments.push_back(J9Segment(id, startAddr, endAddr, segmentType, 0));
             }
@@ -233,6 +234,11 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
             unsigned long long id = hex2ull(tokens[1]);
             unsigned long long startAddr = hex2ull(tokens[2]);
             unsigned long long endAddr = hex2ull(tokens[4]);
+            if (id == HEX_CONVERT_ERROR || startAddr == HEX_CONVERT_ERROR || endAddr == HEX_CONVERT_ERROR)
+               {
+               cerr << "HEX_CONVERT_ERROR in javacore at line:" << lineNo << " : " << line << std::endl;
+               exit(-1);
+               }
             unsigned flags = strtoul(tokens[5].c_str(), NULL, 16);
             segments.push_back(J9Segment(id, startAddr, endAddr, segmentType, flags));
             }
