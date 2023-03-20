@@ -226,7 +226,8 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps)
 
       // Check if shared class cache. Find "javasharedresources" in the details string
       if (crtMap->getDetailsString().find("javasharedresources") != string::npos || // found
-         crtMap->getDetailsString().find("classCache") != string::npos)
+         crtMap->getDetailsString().find("classCache") != string::npos ||
+         crtMap->getDetailsString().find(".scc") != string::npos)
          {
          virtualSize[SCC] += crtMap->size();
          rssSize[SCC] += crtMap->getResidentSize() << 10;
