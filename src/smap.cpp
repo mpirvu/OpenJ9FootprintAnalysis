@@ -148,7 +148,8 @@ Swap:                  0 kB
 KernelPageSize:       64 kB
 MMUPageSize:          64 kB
 Locked:                0 kB
-THPeligible:            0     ==> This is a new field that doesn't have the format of the other fields
+THPeligible:           0      ==> This is a new field that doesn't have the format of the other fields
+ProtectionKey:         0      ==> This is a new field that doesn't have the format of the other fields
 VmFlags: rd ex mr mw me dw    ==> This is a new field that doesn't have the format of the other fields
 */
 
@@ -191,7 +192,9 @@ int parseSmapsDetailedEntry(string line, SmapEntry &entry)
    {
    vector<string> tokens;
    // Deal with exception seen on Power Linux LE. Exclude the lines that start with  "VmFlags:" or "THPeligible:"
-   if (line.compare(0, 8, "VmFlags:") == 0 || line.compare(0, 12, "THPeligible:") == 0)
+   if (line.compare(0, 8,  "VmFlags:")       == 0 ||
+       line.compare(0, 12, "THPeligible:")   == 0 ||
+       line.compare(0, 14, "ProtectionKey:") == 0)
       return 0;
 
    // Split the line into tokens. We expect something like "Size:                  4 kB"
