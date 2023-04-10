@@ -14,7 +14,7 @@ DEPS := $(OBJECTS:.o=.d)
 CC = g++
 
 # Compiler flags
-CFLAGS = -std=c++11 -Wall -O2 -g
+CFLAGS = -std=c++17 -Wall -O2 -g
 
 # Linker flags
 LDFLAGS =

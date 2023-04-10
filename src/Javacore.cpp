@@ -39,6 +39,13 @@ void J9Segment::print(std::ostream& os) const
 
 const char * J9Segment::_segmentTypes[] = { "UNKNOWN", "HEAP", "INTERNAL", "CLASS", "CODECACHE", "DATACACHE" };
 
+// Determine the segment type from the line in the javacore
+// samples:
+// 1STSEGTYPE     Internal Memory
+// 1STSEGTYPE     Class Memory
+// 1STSEGTYPE     JIT Code Cache
+// 1STSEGTYPE     JIT Data Cache
+// 1STHEAPTYPE    Object Memory
 J9Segment::SegmentType determineSegmentType(const string& line)
    {
    vector<string> tokens;
@@ -142,6 +149,10 @@ void javacoreParseStack(ifstream& myfile, int& lineNo, vector<ThreadStack>& thre
       }
    }
 
+/**
+ * Read the javacore file and extract the memory segments and thread stacks
+ * The output is stored in the segments and threadStacks vectors
+*/
 void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, vector<ThreadStack>& threadStacks)
    {
    cout << "Reading javacore file: " << string(javacoreFilename) << endl;
@@ -182,11 +193,12 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
          else if (line.find("1STHEAPREGION", 0) != std::string::npos ||
                   line.find("1STHEAPSPACE", 0) != std::string::npos)
             {
-            // 1STHEAPREGION  0x0000000000561550 0x0000000000580000 0x0000000030570000 0x000000002FFF0000 Generational/Tenured Region
+            // 1STHEAPSPACE   0x00007FD4F4151E00         --                 --                 --         Generational
+            // 1STHEAPREGION  0x00007FD4F41522F0 0x00000000F0000000 0x00000000F2400000 0x0000000002400000 Generational/Tenured Region
+            // 1STHEAPREGION  0x00007FD4F41520E0 0x00000000FDBA0000 0x00000000FDF50000 0x00000000003B0000 Generational/Nursery Region
+            // 1STHEAPREGION  0x00007FD4F4151ED0 0x00000000FDF50000 0x0000000100000000 0x00000000020B0000 Generational/Nursery Region
             // or
             // 1STHEAPSPACE   0x000002302F2E94A0 0x00000000BFF80000 0x00000000FFF80000 0x0000000040000000 Flat
-            // However the following is normal for gencon
-            // 1STHEAPSPACE   0x00007F1530158350         --                 --                 --         Generational
             vector<string> tokens;
             tokenize(line, tokens);
             if (tokens.size() < 6)
@@ -219,6 +231,7 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
          else if (line.find("1STSEGMENT", 0) != std::string::npos)
             {
             // Process one segment
+            //NULL           segment            start              alloc              end                type       size
             //1STSEGMENT     0x00007FBE13B616C0 0x00007FBE07CFB030 0x00007FBE07EF7EA0 0x00007FBE07EFB030 0x00000048 0x0000000000200000
             // Scratch segment
             //1STSEGMENT     0x000002304491E730 0x00007FF68A7C0000 0x00007FF68B260000 0x00007FF68B7C0000 0x01000440 0x0000000001000000
@@ -231,19 +244,19 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
                {
                cerr << "Have found " << tokens.size() << " instead of 7 at line " << lineNo << endl; exit(-1);
                }
-            unsigned long long id = hex2ull(tokens[1]);
+            unsigned long long id        = hex2ull(tokens[1]);
             unsigned long long startAddr = hex2ull(tokens[2]);
-            unsigned long long endAddr = hex2ull(tokens[4]);
+            unsigned long long endAddr   = hex2ull(tokens[4]);
             if (id == HEX_CONVERT_ERROR || startAddr == HEX_CONVERT_ERROR || endAddr == HEX_CONVERT_ERROR)
                {
-               cerr << "HEX_CONVERT_ERROR in javacore at line:" << lineNo << " : " << line << std::endl;
-               exit(-1);
+               cerr << "HEX_CONVERT_ERROR in javacore at line:" << lineNo << " : " << line << std::endl; exit(-1);
                }
             unsigned flags = strtoul(tokens[5].c_str(), NULL, 16);
             segments.push_back(J9Segment(id, startAddr, endAddr, segmentType, flags));
             }
          else if (line.find("1STGCHTYPE", 0) != std::string::npos)
             {
+            // Stop when reaching GC history
             break;
             }
          }

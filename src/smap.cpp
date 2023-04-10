@@ -242,9 +242,7 @@ int parseSmapsDetailedEntry(string line, SmapEntry &entry)
 //-----------------------------------------------------------------
 void readSmapsFile(const char *smapsFilename, std::vector<SmapEntry>& smaps)
    {
-#ifdef DEBUG
-   cout << "Reading file: " << string(smapsFilename) << endl;
-#endif
+   cout << "Reading smaps file: " << string(smapsFilename) << endl;
    // Open the file
    ifstream myfile(smapsFilename);
    // check if successfull

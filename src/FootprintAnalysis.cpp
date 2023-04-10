@@ -24,6 +24,7 @@
 #include <unordered_map>
 #include <utility> // for std::pair
 #include <algorithm> // for sort
+#include <type_traits> // for is_same_v<>
 #include "smap.hpp"
 #include "CallSites.hpp"
 #include "Util.hpp"
@@ -46,9 +47,19 @@ void annotateMapWithSegments(std::vector<MAPENTRY>&maps, const std::vector<T>& s
          if (seg->disjoint(map->getAddrRange()))
             continue;
          if (map->getAddrRange().includes(*seg))
+            {
             map->addCoveringRange(*seg);
+            // For segments, lets identify the maps that are covered by Java heap segments
+            if constexpr (std::is_same_v<T, J9Segment>)
+               {
+               if (seg->getSegmentType() == J9Segment::HEAP)
+                  map->setMapForJavaHeap();
+               }
+            }
          else
+            {
             map->addOverlappingRange(*seg);
+            }
          }
       }
    cout << "Done\n";
@@ -184,11 +195,8 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps)
       virtualSize[i] = rssSize[i] = 0;
    //unsigned long long rss[NUM_CATEGORIES];
 
-
    unsigned long long totalVirtSize = 0;
    unsigned long long totalRssSize = 0;
-
-
 
    TopTen<MAPENTRY, MemoryEntryRssLessThan> topTenDlls;
 
@@ -196,7 +204,7 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps)
 
    TopTen<MAPENTRY, MemoryEntryRssLessThan> topTenPartiallyCovered;
 
-   unordered_map<string, unsigned long long> dllCollection;
+   unordered_map<string, unsigned long long> dllCollection; // maps dll name to size (RSS)
 
    // Iterate through all smaps/vmmaps
    for (auto crtMap = smaps.cbegin(); crtMap != smaps.cend(); ++crtMap)
@@ -225,6 +233,7 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps)
          }
 
       // Check if shared class cache. Find "javasharedresources" in the details string
+      // TODO: get the virtual address of the SCC from the javacore and use it to find the smap
       if (crtMap->getDetailsString().find("javasharedresources") != string::npos || // found
          crtMap->getDetailsString().find("classCache") != string::npos ||
          crtMap->getDetailsString().find(".scc") != string::npos)
@@ -248,15 +257,15 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps)
          sz[i] = 0;
 
       // look for any covering segments
-      const std::list<const AddrRange*> coveringRanges = crtMap->getCoveringRanges();
-      const std::list<const AddrRange*> overlapRanges = crtMap->getOverlappingRanges();
+      const list<const AddrRange*> coveringRanges = crtMap->getCoveringRanges();
+      const list<const AddrRange*> overlapRanges = crtMap->getOverlappingRanges();
       if (coveringRanges.size() != 0 && overlapRanges.size() != 0)
          {
          cerr << "Warning: smap starting at addr " << crtMap->getAddrRange().getStart() << " has both covering and overlapping ranges\n";
          }
       for (auto seg = coveringRanges.cbegin(); seg != coveringRanges.cend(); ++seg)
          {
-         if ((*seg)->rangeType() == AddrRange::J9SEGMENT_RANGE) // exclude callsites
+         if ((*seg)->rangeType() == AddrRange::J9SEGMENT_RANGE) // callsites are treated separately
             {
             // Convert the range to a segment
             const J9Segment* j9seg = static_cast<const J9Segment*>(*seg);
@@ -264,8 +273,8 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps)
             RangeCategories category = getJ9SegmentCategory(j9seg);
             if (category != UNKNOWN)
                {
-               virtualSize[category] += j9seg->size();
-               sz[category] += j9seg->size();
+               virtualSize[category] += j9seg->size(); // virtualSize[] sums up the virtual size of covering ranges for all smaps
+               sz[category] += j9seg->size(); // sz[] sums up the virtual size of covering ranges for this smap
                }
             }
          else if ((*seg)->rangeType() == AddrRange::CALLSITE_RANGE)// This is a callsite
@@ -284,6 +293,7 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps)
             }
          } // end for
       // Now look whether a map is covered by ranges of different types and assign RSS in proportional values
+      // Here we can do a better job is we know for each page of the smap whether it is in RSS or not
       unsigned long long totalCoveredSize = 0;
       int numDifferentCategories = 0;
       int lastNonNullCategory = 0;
@@ -381,7 +391,7 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps)
             topTenNotCovered.processElement(*crtMap);
             }
          }
-      } // end for (iterate through maps)
+      } // end for (iterate through smaps)
    cout << dec << endl;
    cout << "Totals:       Virtual= " << setw(8) << (totalVirtSize >> 10) << " KB; RSS= " << setw(8) << (totalRssSize >> 10) << " KB\n";
    for (int i = 0; i < NUM_CATEGORIES; i++)
@@ -489,7 +499,7 @@ int main(int argc, char* argv[])
    // print results one by one
    for (vector<MapEntry>::const_iterator map = sMaps.begin(); map != sMaps.end(); ++map)
       {
-      map->printEntryWithAnnotations();
+      //map->printEntryWithAnnotations();
       }
 
    printSpaceKBTakenByVmComponents(sMaps);
