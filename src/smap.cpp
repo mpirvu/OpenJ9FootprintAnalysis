@@ -32,6 +32,20 @@
 
 using namespace std;
 
+void SmapEntry::setPurpose(SmapPurpose purpose)
+   {
+   if (_purpose == UNKNOWN)
+      {
+      _purpose = purpose;
+      }
+   else if (_purpose != purpose)
+      {
+      cerr << "Error: Setting _purpose to '" << _purposeNames[purpose] << "' but purpose already set to '" << _purposeNames[_purpose] << "' for " << *this << endl;
+      cerr << "Exiting" << endl;
+      exit(EXIT_FAILURE);
+      }
+   }
+
 /* The entry in a maps file is short version of the smaps entry
    Example
    000c0000-000c1000 ---p 000c0000 00:00 0
@@ -170,6 +184,14 @@ int parseSmapsMainLine(string line, SmapEntry &entry)
          entry.setEnd(hex2ull(result[2]));
          entry._protection.assign(result[3]);
          entry._details.assign(result[7]);
+         if (entry.isMapForSharedLibrary())
+            entry.setPurpose(SmapEntry::DLL);
+         if (entry.isMapForThreadStack())
+            entry.setPurpose(SmapEntry::STACK);
+         if (entry.getDetailsString().find("javasharedresources") != string::npos || // found
+             entry.getDetailsString().find("classCache") != string::npos ||
+             entry.getDetailsString().find(".scc") != string::npos)
+            entry.setPurpose(SmapEntry::SCC);
          return 0;
          }
       else
@@ -186,7 +208,7 @@ int parseSmapsMainLine(string line, SmapEntry &entry)
    }
 
 //------------------------------- parseSmapsDetailedEntry --------------------
-// 'entry' is already partially formed. We just fiil in the rest of its fields
+// 'entry' is already partially formed. We just fill in the rest of its fields
 //----------------------------------------------------------------------------
 int parseSmapsDetailedEntry(string line, SmapEntry &entry)
    {
@@ -317,13 +339,13 @@ void printLargestUnallocatedBlocks(const vector<SmapEntry> &smaps)
    unsigned long long totalGapSize = 0;
    TopTen<AddrRange, AddrRangeSizeLessThan> topTen;
 
-   vector<SmapEntry>::const_iterator crtMap = smaps.begin();
-   if (crtMap != smaps.end())
+   auto crtMap = smaps.cbegin();
+   if (crtMap != smaps.cend())
       {
       virtSize += crtMap->sizeKB();
       rssSize += crtMap->_rss;
-      vector<SmapEntry>::const_iterator prevMap = crtMap;
-      for (++crtMap; crtMap != smaps.end(); prevMap = crtMap, ++crtMap)
+      auto prevMap = crtMap;
+      for (++crtMap; crtMap != smaps.cend(); prevMap = crtMap, ++crtMap)
          {
          virtSize += crtMap->sizeKB();
          rssSize += crtMap->_rss;
@@ -334,7 +356,7 @@ void printLargestUnallocatedBlocks(const vector<SmapEntry> &smaps)
          if (gapSize != 0)
             {
             totalGapSize += gapSize;
-            topTen.processElement(AddrRange(prevMap->getEnd(), crtMap->getStart()));
+            topTen.processElement(AddrRange(prevMap->getEnd(), crtMap->getStart(), 0 /*rss*/));
             }
          }
       }
@@ -387,6 +409,8 @@ bool SmapEntry::isMapForSharedLibrary() const
    {
    // A shared library has .so in its name
    // Note that the name does not necessarily end with .so  Example: /usr/lib/libXext.so.6.4.0
+   // Also note that there for each DLL there are 4 smaps: one with protection "rx-p",
+   // one with protection "---p", one with protection "r--p" and one with protection "rw-p"
    const std::string details = getDetailsString();
    size_t soPosition = details.find(".so");
    if (soPosition != string::npos) // found

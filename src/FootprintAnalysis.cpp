@@ -25,11 +25,13 @@
 #include <utility> // for std::pair
 #include <algorithm> // for sort
 #include <type_traits> // for is_same_v<>
+#include <unistd.h> // for getopt
 #include "smap.hpp"
 #include "CallSites.hpp"
 #include "Util.hpp"
 #include "vmmap.hpp"
 #include "AddrRange.hpp"
+#include "PageMapSupport.hpp"
 #undef WINDOWS_FOOTPRINT
 using namespace std;
 
@@ -49,16 +51,20 @@ void annotateMapWithSegments(std::vector<MAPENTRY>&maps, const std::vector<T>& s
          if (map->getAddrRange().includes(*seg))
             {
             map->addCoveringRange(*seg);
-            // For segments, lets identify the maps that are covered by Java heap segments
+            // For segments, lets identify the maps that are covered by Java heap segments or CODECACHES
             if constexpr (std::is_same_v<T, J9Segment>)
                {
-               if (seg->getSegmentType() == J9Segment::HEAP)
-                  map->setMapForJavaHeap();
+               if (seg->getSegmentType() == J9Segment::JAVAHEAP)
+                  map->setPurpose(SmapEntry::JAVAHEAP);
+               if (seg->getSegmentType() == J9Segment::CODECACHE)
+                  map->setPurpose(SmapEntry::CODECACHE);
                }
             }
          else
             {
+            cerr << "Overlapping range SEG:" << *seg << " and SMAP:" << *map << endl;
             map->addOverlappingRange(*seg);
+            //map->setPurpose(SmapEntry::GENERIC);
             }
          }
       }
@@ -84,6 +90,7 @@ void annotateMapWithThreadStacks(std::vector<MAPENTRY>&maps, std::vector<ThreadS
          if (map->getAddrRange().includes(*stackRegion))
             {
             map->addCoveringRange(*stackRegion);
+            map->setPurpose(SmapEntry::STACK);
             break; // go to next smap
             }
          else
@@ -96,8 +103,9 @@ void annotateMapWithThreadStacks(std::vector<MAPENTRY>&maps, std::vector<ThreadS
                   {
                   // Create a new threadStack just for the size of this smap
                   // This is not technically a memory leak because we need it till the end of the program
-                  ThreadStack *threadStack = new ThreadStack(map->getAddrRange().getStart(), map->getAddrRange().getEnd(), stackRegion->getThreadName());
+                  ThreadStack *threadStack = new ThreadStack(map->getAddrRange().getStart(), map->getAddrRange().getEnd(), stackRegion->getThreadName(), 0 /*rss*/);
                   map->addCoveringRange(*threadStack);
+                  map->setPurpose(SmapEntry::STACK);
                   // Substract the size of the stack guard from the ThreadStack
                   // This adjusted ThreadStack will be attributed to the next map
                   stackRegion->setStart(map->getAddrRange().getEnd());
@@ -135,91 +143,154 @@ unsigned long long printSpaceKBTakenBySharedLibraries(const vector<MAPENTRY> &sm
    }
 
 
-
-enum RangeCategories {
-   GCHEAP = 0,
-   CODECACHE,
-   DATACACHE,
-   DLL,
-   STACK,
-   SCC,
-   SCRATCH,
-   PERSIST,
-   OTHER_INTERNAL,
-   CLASS,
-   CALLSITE,
-   UNKNOWN,
-   NOTCOVERED,
-   NUM_CATEGORIES, // Must be the last one
-   };
-
-RangeCategories getJ9SegmentCategory(const J9Segment* j9seg)
+template <typename MAPENTRY>
+void computeProportionalRssContribution(const MAPENTRY &crtMap, bool usePageMap,
+                                        unsigned long long virtualSize[], // output
+                                        unsigned long long rssSize[]) // output
    {
-   switch (j9seg->getSegmentType())
+   const list<const AddrRange*> coveringRanges = crtMap.getCoveringRanges();
+   const list<const AddrRange*> overlapRanges = crtMap.getOverlappingRanges();
+   if (coveringRanges.size() != 0 && overlapRanges.size() != 0)
       {
-      case J9Segment::HEAP:
-         return GCHEAP;
-         break;
-      case J9Segment::CODECACHE:
-         return CODECACHE;
-         break;
-      case J9Segment::DATACACHE:
-         return DATACACHE;
-         break;
-      case J9Segment::INTERNAL:
-         if (j9seg->isJITScratch())
-            return SCRATCH;
-         else if (j9seg->isJITPersistent())
-            return PERSIST;
-         else
-            return OTHER_INTERNAL;
-         break;
-      case J9Segment::CLASS:
-         return CLASS;
-         break;
-      default:
-         return UNKNOWN;
-      }; // end switch
+      cerr << "Warning: smap starting at addr " << crtMap.getAddrRange().getStart() << " has both covering and overlapping ranges\n";
+      }
+
+   unsigned long long totalCoveredSize = 0;
+   // The following sums up the virtual size for each category covering this smap
+   unsigned long long sz[AddrRange::NUM_CATEGORIES] = {0}; // one entry for each category
+
+   for (auto seg = coveringRanges.cbegin(); seg != coveringRanges.cend(); ++seg)
+      {
+      AddrRange::RangeCategories category = (*seg)->getRangeCategory();
+      unsigned long long size = (*seg)->size();
+      virtualSize[category] += size; // virtualSize[] sums up the virtual size of covering ranges for all smaps
+      sz[category] += size; // sz[] sums up the virtual size of covering ranges for this smap
+      totalCoveredSize += size;
+      if (usePageMap)
+         rssSize[category] += (*seg)->getRSS(); // rssSize[] sums up the RSS of covering ranges for all smaps
+      } // end for
+   // When using the pageMap we already have the RSS for each category,
+   // so we can skip estimating the RSS using the proportional scheme based on virtual size
+   if (usePageMap)
+      return;
+
+   // Determine if the smap is covered by more than one type of range
+   int lastNonNullCategory = 0;
+   int numDifferentCategories = 0;
+   for (int i = 0; i < AddrRange::NUM_CATEGORIES; i++)
+      {
+      if (sz[i] > 0)
+         {
+         numDifferentCategories++;
+         lastNonNullCategory = i;
+         }
+      }
+   if (totalCoveredSize > 0)
+      {
+      // If the map is covered by segments of the same type
+      // then we can charge the entire RSS to that type
+      if (numDifferentCategories == 1)
+         {
+         rssSize[lastNonNullCategory] += (crtMap.getResidentSizeKB() << 10); // convert to bytes
+         }
+      else // Proportional allocation based on virtual size
+         {
+         unsigned long long rssAccountedFor = 0;
+         for (int i = 0; i < AddrRange::NUM_CATEGORIES; i++)
+            {
+            if (sz[i] != 0)
+               {
+               unsigned long long rssFraction = (crtMap.getResidentSizeKB() << 10) * sz[i] / crtMap.size();
+               rssSize[i] += rssFraction;
+               rssAccountedFor += rssFraction;
+               }
+            }
+         rssSize[AddrRange::UNKNOWN] += (crtMap.getResidentSizeKB() << 10) - rssAccountedFor;
+         virtualSize[AddrRange::UNKNOWN] += crtMap.size() - totalCoveredSize;
+         }
+      }
+   else // This map is not covered by anything
+      {
+      // Does it have overlapping ranges?
+      // An overlapping range could happen if smaps are gathered first and then by the time
+      // we collect the javacore the GC expands which makes the GC segment in the javacore
+      // be larger than the smap.
+      if (overlapRanges.size() != 0)
+         {
+         // If the j9segment totally overlaps the smap, then we know the exact type
+         // of j9memory for that smap and the entire RSS can be attributed to that type.
+         // We could relax this heuristic: if the overlapping segments for this smap are of the same kind
+         // then we can guess the kind of memory for the smap.
+         AddrRange::RangeCategories smapCategory = AddrRange::UNKNOWN;
+         for (auto seg = overlapRanges.cbegin(); seg != overlapRanges.cend(); ++seg)
+            {
+            AddrRange::RangeCategories segCategory = (*seg)->getRangeCategory();
+            if (segCategory == AddrRange::UNKNOWN)
+               {
+               // Type of segment is not known, so type of smap is unknown
+               smapCategory = AddrRange::UNKNOWN;
+               break;
+               }
+            else
+               {
+               if (smapCategory == AddrRange::UNKNOWN) // Not yet set
+                  {
+                  smapCategory = segCategory;
+                  }
+               else // Different types of segments. Cannot determine the type of smap
+                  {
+                  smapCategory = AddrRange::UNKNOWN;
+                  break;
+                  }
+               }
+            }
+         rssSize[smapCategory] += (crtMap.getResidentSizeKB() << 10);
+         virtualSize[smapCategory] += crtMap.size();
+         if (smapCategory == AddrRange::UNKNOWN)
+            {
+            cout << "smap with different/unknown segments that are not totaly included in this smap\n";
+            //topTenPartiallyCovered.processElement(*crtMap);
+            }
+         }
+      else // This smap is not covered by anything and it does not overlap anything
+         {
+         rssSize[AddrRange::NOTCOVERED] += (crtMap.getResidentSizeKB() << 10);
+         virtualSize[AddrRange::NOTCOVERED] += crtMap.size();
+         }
+      }
    }
 
+
 template <typename MAPENTRY>
-void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps)
+void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps, bool usePageMap)
    {
    cout << "\nprintSpaceKBTakenByVmComponents...\n";
 
-   const char* RangeCategoryNames[NUM_CATEGORIES] = { "GC heap", "CodeCache", "DataCache", "DLL", "Stack", "SCC", "JITScratch", "JITPersist", "Internal", "Classes", "CallSites", "Unknown", "Not covered" };
    // categories of covering ranges
-   unsigned long long virtualSize[NUM_CATEGORIES]; // one entry for each category
-   unsigned long long rssSize[NUM_CATEGORIES]; // one entry for each category
-   for (int i = 0; i < NUM_CATEGORIES; i++)
-      virtualSize[i] = rssSize[i] = 0;
-   //unsigned long long rss[NUM_CATEGORIES];
-
-   unsigned long long totalVirtSize = 0;
-   unsigned long long totalRssSize = 0;
+   unsigned long long virtualSize[AddrRange::NUM_CATEGORIES] = {0}; // one entry for each category
+   unsigned long long rssSize[AddrRange::NUM_CATEGORIES] = {0}; // one entry for each category
 
    TopTen<MAPENTRY, MemoryEntryRssLessThan> topTenDlls;
 
    TopTen<MAPENTRY, MemoryEntryRssLessThan> topTenNotCovered;
 
-   TopTen<MAPENTRY, MemoryEntryRssLessThan> topTenPartiallyCovered;
-
    unordered_map<string, unsigned long long> dllCollection; // maps dll name to size (RSS)
+
+   unsigned long long totalVirtSize = 0;
+   unsigned long long totalRssSize = 0;
 
    // Iterate through all smaps/vmmaps
    for (auto crtMap = smaps.cbegin(); crtMap != smaps.cend(); ++crtMap)
       {
       totalVirtSize += crtMap->size();
-      totalRssSize += crtMap->getResidentSize() << 10; // convert to bytes
+      totalRssSize += crtMap->getResidentSizeKB() << 10; // convert to bytes
 
-      // Check if shared library
-      if (crtMap->isMapForSharedLibrary())
+      // Check if shared library; these require some extra processing
+      if (crtMap->getPurpose() == SmapEntry::DLL)
          {
-         virtualSize[DLL] += crtMap->size();
-         rssSize[DLL] += crtMap->getResidentSize() << 10;
          topTenDlls.processElement(*crtMap);
 
-         // Note that in Linux a DLL may have 3 smaps. e.g.
+         // Note that in Linux a DLL may have 3 or even 4 smaps. e.g.
          // Size = 11968 rss = 11136 Prot = r-xp / home / jbench / mpirvu / JITDll_gcc / libj9jit28.so
          // Size = 960   rss = 256   Prot = r--p / home / jbench / mpirvu / JITDll_gcc / libj9jit28.so
          // Size = 448   rss = 448   Prot = rw-p / home / jbench / mpirvu / JITDll_gcc / libj9jit28.so
@@ -228,175 +299,52 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps)
          // Then we need to sort by the total RSS
          //
          auto& dllTotalRSSSize = dllCollection[crtMap->getDetailsString()]; // If key does not exist, it will be inserted
-         dllTotalRSSSize += crtMap->getResidentSize() << 10;
-         continue; // DLL maps are not shared with other categories
+         dllTotalRSSSize += crtMap->getResidentSizeKB() << 10;
          }
+      // The following types of smaps have a sole purpose
+      // and we can read the RSS summary directly from the smap
+      AddrRange::RangeCategories addrRangeCategory = AddrRange::UNKNOWN;
+      switch (crtMap->getPurpose())
+         {
+         case SmapEntry::DLL:
+            addrRangeCategory = AddrRange::DLL;
+            break;
+         case SmapEntry::SCC:
+            addrRangeCategory = AddrRange::SCC;
+            break;
+         case SmapEntry::STACK:
+            addrRangeCategory = AddrRange::STACK;
+            break;
+         case SmapEntry::JAVAHEAP:
+            addrRangeCategory = AddrRange::JAVAHEAP;
+            break;
+         case SmapEntry::CODECACHE:
+            addrRangeCategory = AddrRange::CODECACHE;
+            break;
+         default:
+            addrRangeCategory = AddrRange::UNKNOWN;
+         }
+       if (addrRangeCategory != AddrRange::UNKNOWN)
+          {
+          virtualSize[addrRangeCategory] += crtMap->size();
+          rssSize[addrRangeCategory] += crtMap->getResidentSizeKB() << 10;
+          continue; // These smaps are not shared with other categories
+          }
 
-      // Check if shared class cache. Find "javasharedresources" in the details string
-      // TODO: get the virtual address of the SCC from the javacore and use it to find the smap
-      if (crtMap->getDetailsString().find("javasharedresources") != string::npos || // found
-         crtMap->getDetailsString().find("classCache") != string::npos ||
-         crtMap->getDetailsString().find(".scc") != string::npos)
-         {
-         virtualSize[SCC] += crtMap->size();
-         rssSize[SCC] += crtMap->getResidentSize() << 10;
-         continue; // SCC maps are not shared with other categories (even though classes can reside here)
-         }
+      // Determine whether a map is covered by ranges of different types and assign RSS in proportional values
+      // We can do a better job is we know for each page of the smap whether it is in RSS or not
+      computeProportionalRssContribution(*crtMap, usePageMap, virtualSize, rssSize);
 
-      // Thread stacks
-      if (crtMap->isMapForThreadStack())
-         {
-         virtualSize[STACK] += crtMap->size();
-         rssSize[STACK] += crtMap->getResidentSize() << 10;
-         continue; // maps marked as "stack" are not shared with other categories
-         }
-
-      // The following sums up the virtual size for each category covering this smap
-      unsigned long long sz[NUM_CATEGORIES]; // one entry for each category
-      for (int i = 0; i < NUM_CATEGORIES; i++)
-         sz[i] = 0;
-
-      // look for any covering segments
-      const list<const AddrRange*> coveringRanges = crtMap->getCoveringRanges();
-      const list<const AddrRange*> overlapRanges = crtMap->getOverlappingRanges();
-      if (coveringRanges.size() != 0 && overlapRanges.size() != 0)
-         {
-         cerr << "Warning: smap starting at addr " << crtMap->getAddrRange().getStart() << " has both covering and overlapping ranges\n";
-         }
-      for (auto seg = coveringRanges.cbegin(); seg != coveringRanges.cend(); ++seg)
-         {
-         if ((*seg)->rangeType() == AddrRange::J9SEGMENT_RANGE) // callsites are treated separately
-            {
-            // Convert the range to a segment
-            const J9Segment* j9seg = static_cast<const J9Segment*>(*seg);
-            // Determine the type of the segment
-            RangeCategories category = getJ9SegmentCategory(j9seg);
-            if (category != UNKNOWN)
-               {
-               virtualSize[category] += j9seg->size(); // virtualSize[] sums up the virtual size of covering ranges for all smaps
-               sz[category] += j9seg->size(); // sz[] sums up the virtual size of covering ranges for this smap
-               }
-            }
-         else if ((*seg)->rangeType() == AddrRange::CALLSITE_RANGE)// This is a callsite
-            {
-            // Convert the range to a callsite
-            const CallSite* callsite = static_cast<const CallSite*>(*seg);
-            virtualSize[CALLSITE] += callsite->size();
-            sz[CALLSITE] += callsite->size();
-            }
-         else if ((*seg)->rangeType() == AddrRange::THREADSTACK_RANGE)
-            {
-            // Convert the range to a ThreadStack
-            const ThreadStack* threadStack = static_cast<const ThreadStack*>(*seg);
-            virtualSize[STACK] += threadStack->size();
-            sz[STACK] += threadStack->size();
-            }
-         } // end for
-      // Now look whether a map is covered by ranges of different types and assign RSS in proportional values
-      // Here we can do a better job is we know for each page of the smap whether it is in RSS or not
-      unsigned long long totalCoveredSize = 0;
-      int numDifferentCategories = 0;
-      int lastNonNullCategory = 0;
-      for (int i = 0; i < NUM_CATEGORIES; i++)
-         {
-         if (sz[i] > 0)
-            {
-            numDifferentCategories++;
-            lastNonNullCategory = i;
-            }
-         totalCoveredSize += sz[i];
-         }
-
-      if (totalCoveredSize > 0)
-         {
-         // If the map is covered by segments of the same type
-         // then we can charge the entire RSS to that type
-         if (numDifferentCategories == 1)
-            {
-            rssSize[lastNonNullCategory] += (crtMap->getResidentSize() << 10);
-            }
-         else // Proportional allocation
-            {
-            for (int i = 0; i < NUM_CATEGORIES; i++)
-               {
-               // TODO: must do some rounding
-               unsigned long long l = (crtMap->getResidentSize() << 10) * sz[i] / crtMap->size();
-               rssSize[i] += l;
-               }
-            rssSize[UNKNOWN] += (crtMap->getResidentSize() << 10) * (crtMap->size() - totalCoveredSize) / crtMap->size();
-            virtualSize[UNKNOWN] += crtMap->size() - totalCoveredSize;
-            topTenPartiallyCovered.processElement(*crtMap);
-            }
-         }
-      else // This map is not covered by anything
-         {
-         // Does it have overlapping ranges?
-         // An overlapping range could happen if smaps are gathered first and then by the time
-         // we collect the javacore the GC expands which makes the GC segment in the javacore
-         // be larger than the smap.
-         if (overlapRanges.size() != 0)
-            {
-            // If the j9segment totally overlaps the smap, then we know the exact type
-            // of j9memory for that smap and the entire RSS can be attributed to that type.
-            // We could relax this heuristic: if the overlapping segments for this smap are of the same kind
-            // then we can guess the kind of memory for the smap.
-            RangeCategories smapCategory = UNKNOWN;
-            for (auto seg = overlapRanges.cbegin(); seg != overlapRanges.cend(); ++seg)
-               {
-               if ((*seg)->rangeType() == AddrRange::J9SEGMENT_RANGE) // exclude callsites
-                  {
-                  // Convert the range to a segment
-                  const J9Segment* j9seg = static_cast<const J9Segment*>(*seg);
-
-                  // Determine the type of the segment
-                  RangeCategories segCategory = getJ9SegmentCategory(j9seg);
-                  if (segCategory == UNKNOWN)
-                     {
-                     // Type of segment is not known, so type of smap is unknown
-                     smapCategory = UNKNOWN;
-                     break;
-                     }
-                  else
-                     {
-                     if (smapCategory == UNKNOWN) // Not yet set
-                        {
-                        smapCategory = segCategory;
-                        }
-                     else // Different types of segments. Cannot determine the type of smap
-                        {
-                        smapCategory = UNKNOWN;
-                        break;
-                        }
-                     }
-                  }
-               else // callsites
-                  {
-                  // Theoretically we could handle these cases as well, but it's unlikely they occur
-                  smapCategory = UNKNOWN;
-                  break;
-                  }
-               }
-            rssSize[smapCategory] += (crtMap->getResidentSize() << 10);
-            virtualSize[smapCategory] += crtMap->size();
-            if (smapCategory == UNKNOWN)
-               {
-               cout << "smap with different/unknown segments that are not totaly included in this smap\n";
-               topTenPartiallyCovered.processElement(*crtMap);
-               }
-            }
-         else
-            {
-            rssSize[NOTCOVERED] += (crtMap->getResidentSize() << 10);
-            virtualSize[NOTCOVERED] += crtMap->size();
-            topTenNotCovered.processElement(*crtMap);
-            }
-         }
+      if (crtMap->getCoveringRanges().size() == 0 &&
+          crtMap->getOverlappingRanges().size() == 0 &&
+          crtMap->getResidentSizeKB() != 0)
+         topTenNotCovered.processElement(*crtMap);
       } // end for (iterate through smaps)
    cout << dec << endl;
    cout << "Totals:       Virtual= " << setw(8) << (totalVirtSize >> 10) << " KB; RSS= " << setw(8) << (totalRssSize >> 10) << " KB\n";
-   for (int i = 0; i < NUM_CATEGORIES; i++)
+   for (int i = 0; i < AddrRange::NUM_CATEGORIES; i++)
       {
-      cout << setw(11) << RangeCategoryNames[i] << ":  Virtual= " << setw(8) << (virtualSize[i] >> 10) << " KB; RSS= " << setw(8) << (rssSize[i] >> 10) << " KB\n";
+      cout << setw(11) << AddrRange::RangeCategoryNames[i] << ":  Virtual= " << setw(8) << (virtualSize[i] >> 10) << " KB; RSS= " << setw(8) << (rssSize[i] >> 10) << " KB\n";
       }
 
    // Print explanation
@@ -404,7 +352,6 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps)
    cout << "Unknown portion comes from maps that are partially covered by segments and callsites" << endl;
    cout << "'Not covered' are maps that are really not covered by any segment or callsite" << endl;
 
-   //
    // Process the hashtable with DLLs
    //
    using PairStringULL = pair < string, unsigned long long >;
@@ -437,9 +384,6 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps)
 
    cout << "\nTop 10 maps not covered by anything\n";
    topTenNotCovered.print();
-
-   cout << "\nTop 10 maps partially covered\n";
-   topTenPartiallyCovered.print();
    }
 
 
@@ -450,18 +394,59 @@ typedef VmmapEntry MapEntry; // For Windows
 typedef SmapEntry MapEntry;  // For Linux
 #endif
 
+void printUsage(const char *progName)
+   {
+   cerr << "Usage: " << progName << " -s smapsFile -j javacoreFile [-c callsitesFile] [-i PID] [-v]\n" << endl;
+   }
+
 int main(int argc, char* argv[])
    {
-   // Verify number of arguments
-   if (argc < 2)
-      error("Need at least one argument: smaps file, javacore and callsites are optional");
+   int opt;
+   const char *javacoreFilename = nullptr;
+   const char *callsitesFilename = nullptr;
+   const char *smapsFilename = nullptr;
+   int pid = 0;
+   bool verbose = false;
+   while ((opt = getopt(argc, argv, "c:j:ps:v")) != -1)
+      {
+      switch (opt)
+         {
+         case 's':
+            smapsFilename = optarg;
+            break;
+         case 'j':
+            javacoreFilename = optarg;
+            break;
+         case 'c':
+            callsitesFilename = optarg;
+            break;
+         case 'p':
+            pid = atoi(optarg);
+            break;
+         case 'v':
+            verbose = true;
+            break;
+         default: /* '?' */
+            printUsage(argv[0]);
+            exit(EXIT_FAILURE);
+         } // end switch
+      } // end while
+
+   if (smapsFilename == nullptr || javacoreFilename == nullptr)
+      {
+      printUsage(argv[0]);
+      exit(EXIT_FAILURE);
+      }
+
+   // If PID is given, open the page map file
+   PageMapReader *pageMapReader = pid ? new PageMapReader(pid) : nullptr;
 
    // Read the smaps file
    vector<MapEntry> sMaps;
 #ifdef WINDOWS_FOOTPRINT
-   readVmmapFile(argv[1], sMaps);
+   readVmmapFile(smapsFilename, sMaps);
 #else
-   readSmapsFile(argv[1], sMaps);
+   readSmapsFile(smapsFilename, sMaps);
 #endif
 
 
@@ -469,40 +454,43 @@ int main(int argc, char* argv[])
    //===================== Javacore processing ============================
    vector<J9Segment> segments; // must not become out-of-scope until I am done with the maps
    vector<ThreadStack> threadStacks;
-   if (argc >= 3)
-      {
-      // Read the javacore file
-      readJavacore(argv[2], segments, threadStacks);
-#ifdef DEBUG
-      // let's print all segments
-      cout << "Print segments:\n";
-      for (vector<J9Segment>::iterator it = segments.begin(); it != segments.end(); ++it)
-         cout << *it << endl;
-#endif
 
-      // Annotate maps with j9segments
-      annotateMapWithSegments(sMaps, segments);
-      annotateMapWithThreadStacks(sMaps, threadStacks);
-      }
+   readJavacore(javacoreFilename, segments, threadStacks, pageMapReader);
+#ifdef DEBUG
+   // let's print all segments
+   cout << "Print segments:\n";
+   for (vector<J9Segment>::iterator it = segments.begin(); it != segments.end(); ++it)
+      cout << *it << endl;
+#endif
+   // Annotate maps with j9segments
+   annotateMapWithSegments(sMaps, segments);
+   annotateMapWithThreadStacks(sMaps, threadStacks);
 
    //======================== Callsites processing =============================
    vector<CallSite> callSites; // must not become out-of-scope until I am done with the maps
-   if (argc >= 4)
+   if (callsitesFilename)
       {
       // Read the callsites file
-      readCallSitesFile(argv[3], callSites);
+      readCallSitesFile(callsitesFilename, callSites, pageMapReader);
 
       // Annotate the smaps file with callsites
       annotateMapWithSegments(sMaps, callSites);
       }
 
-   // print results one by one
-   for (vector<MapEntry>::const_iterator map = sMaps.begin(); map != sMaps.end(); ++map)
+   if (verbose)
       {
-      //map->printEntryWithAnnotations();
+      // print results one by one
+      for (vector<MapEntry>::const_iterator map = sMaps.begin(); map != sMaps.end(); ++map)
+         map->printEntryWithAnnotations();
       }
 
-   printSpaceKBTakenByVmComponents(sMaps);
+   bool usePageMap = pageMapReader != nullptr;
+   printSpaceKBTakenByVmComponents(sMaps, usePageMap);
+
+   // pageMapReader is not needed anymore
+   if (pageMapReader)
+      delete(pageMapReader);
+
    return 0;
    }
 

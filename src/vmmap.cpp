@@ -65,7 +65,7 @@ bool tokenizeVmmapLine(const string& line, vector<string>& tokens)
 
 // This is used for vmmap files in text format where fields start at fixed positions
 // The positions of these fields can be given by the postion of the headings
-// We use an array of these postions as input 
+// We use an array of these postions as input
 bool tokenizeVmmapTextLine(const string& line, vector<string>& tokens, const vector<size_t>& fieldPositions)
    {
    size_t lineSize = line.size();
@@ -94,7 +94,7 @@ bool tokenizeVmmapTextLine(const string& line, vector<string>& tokens, const vec
 #endif
          continue;
          }
-       
+
       // Read field by extracting substring bewteen startPos and endPos
       // and strip leading and trailing spaces
       string token = line.substr(startPosInLine, endPosInLine - startPosInLine);
@@ -151,7 +151,7 @@ void readVmmapTextFile(const char *vmmapFilename, vector<VmmapEntry>& vmmaps)
       cout << "readVmmapFile looking at :" << line << endl;
 #endif
       size_t startPos = line.find("Address");
-    
+
       if (std::string::npos != startPos)
          {
          fieldPositions.push_back(startPos);
@@ -249,11 +249,11 @@ void readVmmapTextFile(const char *vmmapFilename, vector<VmmapEntry>& vmmaps)
       // skip empty lines or lines that do not start with some character (subblock start with ampty space)
       if (line.find_first_not_of(" \t\n\r") != 0)
          continue;
-     
+
 #ifdef DEBUG
       cout << "readVmmapEntry looking at line " << lineNo << " with " << line.size() << " characters: " << line << endl;
 #endif
-     
+
       std::vector<std::string> tokens; // we should do tokens(13)
 
       if (!tokenizeVmmapTextLine(line, tokens, fieldPositions))
@@ -309,7 +309,7 @@ void readVmmapTextFile(const char *vmmapFilename, vector<VmmapEntry>& vmmaps)
       vmmaps.push_back(entry);
 
       virtSize += entry.sizeKB();
-      rssSize += entry.getResidentSize();
+      rssSize += entry.getResidentSizeKB();
       }
    myfile.close();
    cout << std::dec << "Total virtual size: " << virtSize << " kB. Total rss:" << rssSize << " kB." << endl;
@@ -419,7 +419,7 @@ void readVmmapCsvFile(const char *vmmapFilename, vector<VmmapEntry>& vmmaps)
       vmmaps.push_back(entry);
 
       virtSize += entry.sizeKB();
-      rssSize += entry.getResidentSize();
+      rssSize += entry.getResidentSizeKB();
       }
    myfile.close();
    cout << std::dec << "Total virtual size: " << virtSize << " kB. Total rss:" << rssSize << " kB." << endl;

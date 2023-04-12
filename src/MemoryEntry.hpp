@@ -33,10 +33,10 @@
 class MemoryEntry
    {
    public:
-      AddrRange            _addrRange;
-      unsigned long long   _rss;
-      std::string          _details;
-      std::string          _protection;
+      AddrRange          _addrRange;
+      unsigned long long _rss;
+      std::string        _details;
+      std::string        _protection;
       // The following two fields are sorted lists of heterogenous objects derived from AddrRange
       // To be able to call the correct 'print' function based on the type of the object
       // we must store pointers
@@ -60,7 +60,7 @@ class MemoryEntry
       const std::list<const AddrRange*> getOverlappingRanges() const { return _overlappingRanges; }
       unsigned long long sizeKB() const { return _addrRange.sizeKB(); } // !! result in KB
       unsigned long long size() const { return _addrRange.size(); }
-      unsigned long long getResidentSize() const { return _rss; } // result in KB
+      unsigned long long getResidentSizeKB() const { return _rss; } // result in KB
       unsigned long long gapKB(const MemoryEntry& toOther) const { return _addrRange.gapKB(toOther.getAddrRange()); }
       const std::string& getDetailsString() const { return _details; }
       const std::string& getProtectionString() const { return _protection; }
@@ -97,7 +97,7 @@ struct MemoryEntryRssLessThan : public std::binary_function<MemoryEntry, MemoryE
    {
    bool operator() (const MemoryEntry& m1, const MemoryEntry& m2) const
       {
-      return (m1.getResidentSize() < m2.getResidentSize());
+      return (m1.getResidentSizeKB() < m2.getResidentSizeKB());
       }
    };
 

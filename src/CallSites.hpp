@@ -22,26 +22,28 @@
 #ifndef _CALLSITE_HPP__
 #define _CALLSITE_HPP__
 #include "AddrRange.hpp"
+class PageMapReader;
 
 class CallSite : public AddrRange
    {
    std::string        _filename;
    unsigned           _lineNo;
    public:
-      CallSite(unsigned long long startAddr, unsigned long long endAddr, const std::string& filename, int lineNo) :
-         AddrRange(startAddr, endAddr), _filename(filename), _lineNo(lineNo){}
+      CallSite(unsigned long long startAddr, unsigned long long endAddr, const std::string& filename, int lineNo, unsigned long long rss) :
+         AddrRange(startAddr, endAddr, rss), _filename(filename), _lineNo(lineNo) {}
       virtual void clear()
          {
          AddrRange::clear();
          _filename.clear();
          _lineNo = 0;
          }
-      virtual int rangeType() const { return CALLSITE_RANGE; }
+      virtual int rangeType() const override { return CALLSITE_RANGE; }
+      virtual RangeCategories getRangeCategory() const override { return CALLSITE; }
    protected:
       virtual void print(std::ostream& os) const;
    }; //  AddrRange
 
-void readCallSitesFile(const char *filename, std::vector<CallSite>& callSites);
+void readCallSitesFile(const char *filename, std::vector<CallSite>& callSites, PageMapReader *pageMapReader);
 
 
 #endif // _CALLSITE_HPP__
