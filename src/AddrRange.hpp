@@ -28,11 +28,34 @@
 
 class AddrRange
    {
+   public:
+   enum RangeCategories
+      {
+      JAVAHEAP = 0,
+      CODECACHE,
+      DATACACHE,
+      DLL,
+      STACK,
+      SCC,
+      SCRATCH,
+      PERSIST,
+      OTHER_INTERNAL,
+      CLASS,
+      CALLSITE,
+      UNKNOWN,
+      NOTCOVERED,
+      NUM_CATEGORIES, // Must be the last one
+      }; // enum RangeCategories
+   static constexpr const char* const RangeCategoryNames[NUM_CATEGORIES] = { "GC heap", "CodeCache", "DataCache", "DLL", "Stack", "SCC", "JITScratch", "JITPersist", "Internal", "Classes", "CallSites", "Unknown", "Not covered" };
+   static_assert(NUM_CATEGORIES == sizeof(RangeCategoryNames)/sizeof(RangeCategoryNames[0]), "RangeCategoryNames array size mismatch");
+
+   private:
    unsigned long long _startAddr;
    unsigned long long _endAddr;
+   unsigned long long _rss = 0;
    public:
-      AddrRange() : _startAddr(0), _endAddr(0) {}
-      AddrRange(unsigned long long start, unsigned long long end) : _startAddr(start), _endAddr(end)
+      AddrRange() : _startAddr(0), _endAddr(0), _rss(0) {}
+      AddrRange(unsigned long long start, unsigned long long end, unsigned long long _rss) : _startAddr(start), _endAddr(end), _rss(_rss)
          {
          if (end <= start && !(start == 0 && end == 0))
             {
@@ -41,9 +64,12 @@ class AddrRange
          }
       unsigned long long getStart() const { return _startAddr; }
       unsigned long long getEnd() const { return _endAddr; }
+      unsigned long long getRSS() const { return _rss; }
       void setStart(unsigned long long a){ _startAddr = a; }
       void setEnd(unsigned long long a) { _endAddr = a; }
-      virtual void clear() { _startAddr = _endAddr = 0; }
+      void setRSS(unsigned long long rss) { _rss = rss; }
+      virtual RangeCategories getRangeCategory() const { return UNKNOWN; }
+      virtual void clear() { _startAddr = _endAddr = 0; _rss = 0; }
       bool includes(const AddrRange& other) const { return other._startAddr >= _startAddr && other._endAddr <= _endAddr; }
       bool disjoint(const AddrRange& other) const { return _endAddr <= other._startAddr || other._endAddr <= _startAddr; }
       unsigned long long size() const { return _endAddr - _startAddr; }
@@ -57,6 +83,7 @@ class AddrRange
       friend std::ostream& operator<<(std::ostream& os, const AddrRange& ar);
       enum { SIMPLE_RANGE = 0, CALLSITE_RANGE, J9SEGMENT_RANGE, THREADSTACK_RANGE };
       virtual int rangeType() const { return SIMPLE_RANGE; }
+
    protected:
       virtual void print(std::ostream& os) const
          {

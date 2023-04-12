@@ -27,6 +27,7 @@
 #include <regex>
 #include "Util.hpp"
 #include "Javacore.hpp"
+#include "PageMapSupport.hpp"
 
 using namespace std;
 
@@ -37,7 +38,29 @@ void J9Segment::print(std::ostream& os) const
       " size=" << setfill(' ') << std::dec << setw(5) << sizeKB() << " KB flags=" << std::hex << setfill('0') << setw(8) << getFlags();
    }
 
-const char * J9Segment::_segmentTypes[] = { "UNKNOWN", "HEAP", "INTERNAL", "CLASS", "CODECACHE", "DATACACHE" };
+// Convert from a J9Segment::SegmentType to a RangeCategory
+AddrRange::RangeCategories J9Segment::getRangeCategory() const
+   {
+   switch (_type)
+      {
+      case J9Segment::JAVAHEAP:
+         return AddrRange::JAVAHEAP;
+      case J9Segment::CODECACHE:
+         return AddrRange::CODECACHE;
+      case J9Segment::DATACACHE:
+         return AddrRange::DATACACHE;
+      case J9Segment::INTERNAL:
+         if (isJITScratch())
+            return AddrRange::SCRATCH;
+         if (isJITPersistent())
+            return AddrRange::PERSIST;
+         return AddrRange::OTHER_INTERNAL;
+      case J9Segment::CLASS:
+         return AddrRange::CLASS;
+      default:
+         return AddrRange::UNKNOWN;
+      }; // end switch
+   }
 
 // Determine the segment type from the line in the javacore
 // samples:
@@ -79,7 +102,7 @@ void ThreadStack::print(std::ostream& os) const
       " size=" << setfill(' ') << std::dec << setw(5) << sizeKB() << " KB";
    }
 
-void javacoreParseStack(ifstream& myfile, int& lineNo, vector<ThreadStack>& threadStacks)
+void javacoreParseStack(ifstream& myfile, int& lineNo, vector<ThreadStack>& threadStacks, PageMapReader *pageMapReader)
    {
    string line;
    bool foundThreadDetailsSection = false;
@@ -142,8 +165,13 @@ void javacoreParseStack(ifstream& myfile, int& lineNo, vector<ThreadStack>& thre
             unsigned long long endAddr = hex2ull(result[2]);
             unsigned long long blockSize = hex2ull(result[3]);
             if (endAddr - startAddr != blockSize)
+               {
                cerr << "Error for thread stack size in line " << lineNo << endl;
-            threadStacks.push_back(ThreadStack(startAddr, endAddr, threadName));
+               continue;
+               }
+
+            unsigned long long rss = pageMapReader ? pageMapReader->computeRssForAddrRange(startAddr, endAddr) : 0;
+            threadStacks.push_back(ThreadStack(startAddr, endAddr, threadName, rss));
             }
          }
       }
@@ -153,7 +181,7 @@ void javacoreParseStack(ifstream& myfile, int& lineNo, vector<ThreadStack>& thre
  * Read the javacore file and extract the memory segments and thread stacks
  * The output is stored in the segments and threadStacks vectors
 */
-void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, vector<ThreadStack>& threadStacks)
+void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, vector<ThreadStack>& threadStacks, PageMapReader *pageMapReader)
    {
    cout << "Reading javacore file: " << string(javacoreFilename) << endl;
    // Open the file
@@ -188,7 +216,7 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
          {
          if (line.find("1STHEAPTYPE", 0) != std::string::npos)
             {
-            segmentType = J9Segment::HEAP;
+            segmentType = J9Segment::JAVAHEAP;
             }
          else if (line.find("1STHEAPREGION", 0) != std::string::npos ||
                   line.find("1STHEAPSPACE", 0) != std::string::npos)
@@ -218,7 +246,7 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
                cerr << "HEX_CONVERT_ERROR in javacore at line:" << lineNo << " : " << line << std::endl;
                exit(-1);
                }
-            segments.push_back(J9Segment(id, startAddr, endAddr, segmentType, 0));
+            segments.push_back(J9Segment(id, startAddr, endAddr, segmentType, 0, 0/*rss*/));
             }
          else if (line.find("1STSEGTYPE", 0) != std::string::npos)
             {
@@ -252,7 +280,13 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
                cerr << "HEX_CONVERT_ERROR in javacore at line:" << lineNo << " : " << line << std::endl; exit(-1);
                }
             unsigned flags = strtoul(tokens[5].c_str(), NULL, 16);
-            segments.push_back(J9Segment(id, startAddr, endAddr, segmentType, flags));
+
+            // For some segment types we may want to compute the RSS right here
+            unsigned long long rss = 0;
+            if (pageMapReader && (segmentType == J9Segment::CLASS || segmentType == J9Segment::DATACACHE || segmentType == J9Segment::INTERNAL))
+               rss = pageMapReader->computeRssForAddrRange(startAddr, endAddr);
+
+            segments.push_back(J9Segment(id, startAddr, endAddr, segmentType, flags, rss));
             }
          else if (line.find("1STGCHTYPE", 0) != std::string::npos)
             {
@@ -261,7 +295,7 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
             }
          }
       } // end while
-   javacoreParseStack(myfile, lineNo, threadStacks);
+   javacoreParseStack(myfile, lineNo, threadStacks, pageMapReader);
    myfile.close();
    cout << "Reading of segments from javacore file finished\n";
    }

@@ -49,8 +49,32 @@ class SmapEntry : public MemoryEntry
       int _swap;
       int _kernelPageSize;
       int _mmuPageSize;
+
+   // Some smaps contain allocations for a single purpose, such as the java heap, stack, or code cache.
+   // If an smap is for a single purpose, we can use this enum to identify the purpose.
+   // Otherwise, the purpose is GENERIC.
+   // For smaps with a single purpose we can get RSS directly from the smap and don't have to read the page map
+   enum SmapPurpose {
+      UNKNOWN = 0,
+      GENERIC,
+      JAVAHEAP,
+      DLL,
+      STACK,
+      CODECACHE,
+      SCC
+   };
+   static constexpr const char * const _purposeNames[] = {
+      "UNKNOWN",
+      "GENERIC",
+      "JAVAHEAP",
+      "DLL",
+      "STACK",
+      "CODECACHE",
+      "SCC"
+   };
    private:
-      bool _mapForJavaHeap; // may turn to 'true' when we discover the smap is used for Java heap
+      SmapPurpose _purpose;
+      //bool _mapForJavaHeap; // may turn to 'true' when we discover the smap is used for Java heap
    public:
       SmapEntry() { clear(); }
       virtual void clear()
@@ -58,12 +82,12 @@ class SmapEntry : public MemoryEntry
          MemoryEntry::clear();
          _pss = 0; _sharedClean = 0; _sharedDirty = 0;
          _privateClean = 0; _privateDirty = 0; _swap = 0; _kernelPageSize = 0; _mmuPageSize = 0;
-         _mapForJavaHeap = false;
+         _purpose = UNKNOWN;
          }
+      SmapPurpose getPurpose() const { return _purpose; }
+      void setPurpose(SmapPurpose purpose);
       bool isMapForSharedLibrary() const;
       bool isMapForThreadStack() const;
-      bool isMapForJavaHeap() const { return _mapForJavaHeap; }
-      void setMapForJavaHeap() { _mapForJavaHeap = true; }
    protected:
       virtual void print(std::ostream& os) const;
    private:

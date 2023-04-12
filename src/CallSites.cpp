@@ -27,6 +27,7 @@
 #include <regex>
 #include "CallSites.hpp"
 #include "Util.hpp"
+#include "PageMapSupport.hpp"
 
 using namespace std;
 
@@ -36,7 +37,7 @@ using namespace std;
  !j9x 0x004FA8E0,0x000001E8	LargeObjectAllocateStats.cpp:45
  !j9x 0x004FAB00,0x000000A4	TLHAllocationInterface.cpp:53
 */
-void readCallSitesFile(const char *filename, vector<CallSite>& callSites)
+void readCallSitesFile(const char *filename, vector<CallSite>& callSites, PageMapReader *pageMapReader)
    {
    cout << "\nReading callSites file: " << string(filename) << endl;
    // Open the file
@@ -69,9 +70,11 @@ void readCallSitesFile(const char *filename, vector<CallSite>& callSites)
          {
          unsigned long long startAddr = hex2ull(result[1]);
          unsigned long long blockSize = hex2ull(result[2]);
+         unsigned long long endAddr = startAddr + blockSize;
          unsigned lineNo = match1 ? (unsigned)a2ull(result[4]) : 0;
          //cerr << "Match found: start=" << hex << startAddr << " blockSize=" << blockSize << " " << result[3] << ":" << lineNo << endl;
-         callSites.push_back(CallSite(startAddr, startAddr+blockSize, result[3], lineNo));
+         unsigned long long rss = pageMapReader ? pageMapReader->computeRssForAddrRange(startAddr, endAddr) : 0;
+         callSites.push_back(CallSite(startAddr, startAddr+blockSize, result[3], lineNo, rss));
          totalSize += blockSize;
          }
       else // try another pattern

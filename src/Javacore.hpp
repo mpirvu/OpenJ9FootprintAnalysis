@@ -25,7 +25,7 @@
 #include <vector>
 #include <string>
 #include "AddrRange.hpp"
-
+class PageMapReader;
 
 
 class J9Segment : public  AddrRange
@@ -38,7 +38,7 @@ class J9Segment : public  AddrRange
       enum SegmentType
          {
          UNKNOWN = 0,
-         HEAP,
+         JAVAHEAP,
          INTERNAL,
          CLASS,
          CODECACHE,
@@ -48,10 +48,11 @@ class J9Segment : public  AddrRange
       unsigned long long _id;
       SegmentType        _type;
       unsigned           _flags;
-      static const char *_segmentTypes[];
+      static constexpr const char * const _segmentTypes[] = { "UNKNOWN", "JAVAHEAP", "INTERNAL", "CLASS", "CODECACHE", "DATACACHE" };
+
    public:
-      J9Segment(unsigned long long id, unsigned long long start, unsigned long long end, SegmentType segType, unsigned flags) :
-         AddrRange(start, end),  _id(id), _type(segType), _flags(flags) {}
+      J9Segment(unsigned long long id, unsigned long long start, unsigned long long end, SegmentType segType, unsigned flags, unsigned long long rss) :
+         AddrRange(start, end, rss),  _id(id), _type(segType), _flags(flags) {}
       const char *getTypeName() const { return _segmentTypes[_type]; }
       SegmentType getSegmentType() const { return _type; }
       unsigned getFlags() const { return _flags; }
@@ -62,7 +63,8 @@ class J9Segment : public  AddrRange
          _type = UNKNOWN;
          _flags = 0;
          }
-      virtual int rangeType() const { return J9SEGMENT_RANGE; }
+      virtual int rangeType() const override { return J9SEGMENT_RANGE; }
+      virtual RangeCategories getRangeCategory() const override;
       bool isJITScratch() const { return _type == INTERNAL && (_flags & MEMORY_TYPE_JIT_SCRATCH_SPACE); }
       bool isJITPersistent() const { return _type == INTERNAL && (_flags & MEMORY_TYPE_JIT_PERSISTENT); }
    protected:
@@ -76,20 +78,22 @@ class ThreadStack : public  AddrRange
       std::string _threadName;
 
    public:
-      ThreadStack(unsigned long long start, unsigned long long end, const std::string& threadName) : AddrRange(start, end), _threadName(threadName) {}
+      ThreadStack(unsigned long long start, unsigned long long end, const std::string& threadName, unsigned long long rss) :
+         AddrRange(start, end, rss), _threadName(threadName) {}
       const std::string& getThreadName() const { return _threadName; }
       virtual void clear()
          {
          AddrRange::clear();
          _threadName.clear();
          }
-      virtual int rangeType() const { return THREADSTACK_RANGE; }
+      virtual int rangeType() const override { return THREADSTACK_RANGE; }
+      virtual RangeCategories getRangeCategory() const override { return STACK; }
    protected:
       virtual void print(std::ostream& os) const;
    }; // J9Segment
 
 J9Segment::SegmentType determineSegmentType(const std::string& line);
-void readJavacore(const char * javacoreFilename, std::vector<J9Segment>& segments, std::vector<ThreadStack>& threadStacks);
+void readJavacore(const char * javacoreFilename, std::vector<J9Segment>& segments, std::vector<ThreadStack>& threadStacks, PageMapReader *pagemapReader);
 
 
 #endif // _J9_SEGMENT_HPP__
