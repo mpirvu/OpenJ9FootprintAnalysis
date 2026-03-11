@@ -56,21 +56,21 @@ void MemoryEntry::printEntryWithAnnotations() const
    // Print the entry first
    cout << "MemEntry: " << *this << endl;
    // Check whether I need to print any covering segments/call-sites
-   const list<const AddrRange*> coveringRanges = getCoveringRanges();
+   const list<const AddrRange*> &coveringRanges = getCoveringRanges();
    if (coveringRanges.size() != 0)
       {
       cout << "\tCovering segments/call-sites:\n";
       // Go through the list of covering ranges
-      for (list<const AddrRange*>::const_iterator range = coveringRanges.begin(); range != coveringRanges.end(); ++range)
+      for (auto range = coveringRanges.cbegin(); range != coveringRanges.cend(); ++range)
          {
          cout << "\t\t" << **range << endl;
          }
       }
-   const list<const AddrRange*> overlappingRanges = getOverlappingRanges();
+   const list<const AddrRange*> &overlappingRanges = getOverlappingRanges();
    if (overlappingRanges.size() != 0)
       {
       cout << "\tOverlapping segments/call-sites:\n";
-      for (list<const AddrRange*>::const_iterator range = overlappingRanges.begin(); range != overlappingRanges.end(); ++range)
+      for (auto range = overlappingRanges.cbegin(); range != overlappingRanges.cend(); ++range)
          {
          cout << "\t\t" << **range << endl;
          }

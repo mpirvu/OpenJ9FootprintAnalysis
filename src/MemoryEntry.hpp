@@ -56,8 +56,8 @@ class MemoryEntry
       void addCoveringRange(const AddrRange& seg);
       void addOverlappingRange(const AddrRange& seg) { _overlappingRanges.push_back(&seg); }
 
-      const std::list<const AddrRange*> getCoveringRanges() const { return _coveringRanges; }
-      const std::list<const AddrRange*> getOverlappingRanges() const { return _overlappingRanges; }
+      const std::list<const AddrRange*> &getCoveringRanges() const { return _coveringRanges; }
+      const std::list<const AddrRange*> &getOverlappingRanges() const { return _overlappingRanges; }
       unsigned long long sizeKB() const { return _addrRange.sizeKB(); } // !! result in KB
       unsigned long long size() const { return _addrRange.size(); }
       unsigned long long getResidentSizeKB() const { return _rss; } // result in KB

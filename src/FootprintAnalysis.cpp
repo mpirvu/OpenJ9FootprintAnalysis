@@ -41,6 +41,7 @@ template <typename MAPENTRY, typename T>
 void annotateMapWithSegments(std::vector<MAPENTRY>&maps, const std::vector<T>& segments)
    {
    // Annotate maps with j9segments
+   // TODO: use binary search because smaps are sorted by address.
    cout << "Annotate maps with segments ...";
    for (auto map = maps.begin(); map != maps.end(); ++map)
       {
@@ -51,7 +52,8 @@ void annotateMapWithSegments(std::vector<MAPENTRY>&maps, const std::vector<T>& s
          if (map->getAddrRange().includes(*seg))
             {
             map->addCoveringRange(*seg);
-            // For segments, lets identify the maps that are covered by Java heap segments or CODECACHES
+            // For segments, lets identify the maps that are covered by Java heap segments or CODECACHES.
+            // These segments cannot share an smap with other types of segments.
             if constexpr (std::is_same_v<T, J9Segment>)
                {
                if (seg->getSegmentType() == J9Segment::JAVAHEAP)
@@ -62,6 +64,13 @@ void annotateMapWithSegments(std::vector<MAPENTRY>&maps, const std::vector<T>& s
             }
          else
             {
+            // A class segment can span several smaps used for SCC.
+            // In this case we ignore the class segment.
+            if constexpr (std::is_same_v<T, J9Segment>)
+               {
+               if (map->getPurpose() == SmapEntry::SCC && seg->getSegmentType() == J9Segment::CLASS)
+                  continue;
+               }
             cerr << "Overlapping range SEG:" << *seg << " and SMAP:" << *map << endl;
             map->addOverlappingRange(*seg);
             //map->setPurpose(SmapEntry::GENERIC);
@@ -82,40 +91,24 @@ void annotateMapWithThreadStacks(std::vector<MAPENTRY>&maps, std::vector<ThreadS
          {
          if (stackRegion->disjoint(map->getAddrRange()))
             continue;
-         // A stackRegion usually spans two smaps: one for the stack guard
-         // which is protected to R/W and one for the stack itself
-         // We want to cover the entire stack guard with part of the thread stack and
-         // cover entirely or partially the next smap with the remaining of the thread
-         // stack
+         // A stackRegion may span two smaps: one for the stack guard
+         // which is protected to R/W and one for the stack itself.
+         // In the newer OpenJ9 versions the start-end addresses for a thread stack
+         // from javacore form a region that is totally included in an smap.
+         // There is another smap for the guard page, but that can be ignored
+         // because it does not use any RSS.
+         // Note that the stack region can share the same smap with other segments (e.g. JIT persistent).
          if (map->getAddrRange().includes(*stackRegion))
             {
             map->addCoveringRange(*stackRegion);
-            map->setPurpose(SmapEntry::STACK);
+            // Since stack regions can share an smap with other segments we must not set a purpose
+            //map->setPurpose(SmapEntry::STACK);
             break; // go to next smap
             }
          else
             {
-            // This could be our stack guard
-            // Typically the start of the smap is the same as the start of the thread stack
-            if (stackRegion->includes(map->getAddrRange()))
-               {
-               if (stackRegion->getStart() == map->getAddrRange().getStart())
-                  {
-                  // Create a new threadStack just for the size of this smap
-                  // This is not technically a memory leak because we need it till the end of the program
-                  ThreadStack *threadStack = new ThreadStack(map->getAddrRange().getStart(), map->getAddrRange().getEnd(), stackRegion->getThreadName(), 0 /*rss*/);
-                  map->addCoveringRange(*threadStack);
-                  map->setPurpose(SmapEntry::STACK);
-                  // Substract the size of the stack guard from the ThreadStack
-                  // This adjusted ThreadStack will be attributed to the next map
-                  stackRegion->setStart(map->getAddrRange().getEnd());
-                  }
-               }
-            else
-               {
-               cout << "Unexpected situation with ThreadStack " << *stackRegion << " and smap " << *map;
-               map->addOverlappingRange(*stackRegion);
-               }
+            cerr << "WARNING: Unexpected situation with ThreadStack " << *stackRegion << " and smap " << *map;
+            map->addOverlappingRange(*stackRegion);
             }
          }
       }
@@ -143,13 +136,25 @@ unsigned long long printSpaceKBTakenBySharedLibraries(const vector<MAPENTRY> &sm
    }
 
 
+/*
+ * An smap could be covered by adress ranges of different categories (e,g. DataCache, JITPersist, CallSites, etc).
+ * Given that we don't known exactly which resident pages belong to these different categories,
+ * we use a "proportional" approach: if category X uses n% of the virtual space of the smap,
+ * then we assume that category X also uses n% of the RSS for that smap.
+ * A better estimation could be done if we use the pageMap from the kernel. This requires
+ * the target process to be live when we do the footprint analysis.
+ * @param crtMap     The smap to proces
+ * @param usePageMap Indicates whether to read the mapPage from the kernel
+ * @param virtualSize [OUT] Array of virtual sizes for each possible memory category
+ * @param rssSize [OUT] Array with RSS contributions of each possible memory category
+ */
 template <typename MAPENTRY>
 void computeProportionalRssContribution(const MAPENTRY &crtMap, bool usePageMap,
                                         unsigned long long virtualSize[], // output
                                         unsigned long long rssSize[]) // output
    {
-   const list<const AddrRange*> coveringRanges = crtMap.getCoveringRanges();
-   const list<const AddrRange*> overlapRanges = crtMap.getOverlappingRanges();
+   const list<const AddrRange*> &coveringRanges = crtMap.getCoveringRanges();
+   const list<const AddrRange*> &overlapRanges = crtMap.getOverlappingRanges();
    if (coveringRanges.size() != 0 && overlapRanges.size() != 0)
       {
       cerr << "Warning: smap starting at addr " << crtMap.getAddrRange().getStart() << " has both covering and overlapping ranges\n";
@@ -196,7 +201,7 @@ void computeProportionalRssContribution(const MAPENTRY &crtMap, bool usePageMap,
       else // Proportional allocation based on virtual size
          {
          unsigned long long rssAccountedFor = 0;
-         for (int i = 0; i < AddrRange::NUM_CATEGORIES; i++)
+         for (int i = 0; i <= lastNonNullCategory; i++)
             {
             if (sz[i] != 0)
                {
@@ -274,7 +279,8 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps, bool usePage
 
    TopTen<MAPENTRY, MemoryEntryRssLessThan> topTenNotCovered;
 
-   unordered_map<string, unsigned long long> dllCollection; // maps dll name to size (RSS)
+   // Hashtable that maps <dllname --> dllrss>
+   unordered_map<string, unsigned long long> dllCollection;
 
    unsigned long long totalVirtSize = 0;
    unsigned long long totalRssSize = 0;
@@ -332,7 +338,7 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps, bool usePage
           }
 
       // Determine whether a map is covered by ranges of different types and assign RSS in proportional values
-      // We can do a better job is we know for each page of the smap whether it is in RSS or not
+      // We can do a better job if we know for each page of the smap whether it is in RSS or not
       computeProportionalRssContribution(*crtMap, usePageMap, virtualSize, rssSize);
 
       if (crtMap->getCoveringRanges().size() == 0 &&
