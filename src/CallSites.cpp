@@ -37,7 +37,7 @@ using namespace std;
  !j9x 0x004FA8E0,0x000001E8	LargeObjectAllocateStats.cpp:45
  !j9x 0x004FAB00,0x000000A4	TLHAllocationInterface.cpp:53
 */
-void readCallSitesFile(const char *filename, vector<CallSite>& callSites, PageMapReader *pageMapReader)
+void readCallSitesFile(const char *filename, vector<CallSite>& callSites)
    {
    cout << "\nReading callSites file: " << string(filename) << endl;
    // Open the file
@@ -45,14 +45,18 @@ void readCallSitesFile(const char *filename, vector<CallSite>& callSites, PageMa
    // check if successfull
    if (!myfile.is_open())
       {
-      cerr << "Cannot open " << filename << endl;
-      exit(-1);
+      throw std::runtime_error("Cannot open " + std::string(filename));
       }
+   std::regex  pattern1("\\s*\\!j9x 0x([0-9A-F]+),0x([0-9A-F]+)\\s+(\\S+):(\\d+)");
+   std::regex  pattern2("\\s*\\!j9x 0x([0-9A-F]+),0x([0-9A-F]+)\\s+(\\S+)");
    string line;
    unsigned long long totalSize = 0;
+   static const string prefix("!j9x");
+   unsigned lineNum = 0;
    while (myfile.good())
       {
       getline(myfile, line);
+      lineNum++;
       // skip empty lines
       size_t pos;
       if ((pos = line.find_first_not_of(" \t\n")) == string::npos)
@@ -62,25 +66,20 @@ void readCallSitesFile(const char *filename, vector<CallSite>& callSites, PageMa
          continue;
 
       std::cmatch result;       //!j9x 0xstart,0xsize	               filename:lineNo
-      std::regex  pattern1("\\s*\\!j9x 0x([0-9A-F]+),0x([0-9A-F]+)\\s+(\\S+):(\\d+)");
-      std::regex  pattern2("\\s*\\!j9x 0x([0-9A-F]+),0x([0-9A-F]+)\\s+(\\S+)");
       bool match1, match2;
       if ((match1 = std::regex_search(line.c_str(), result, pattern1)) ||
           (match2 = std::regex_search(line.c_str(), result, pattern2)))
          {
          unsigned long long startAddr = hex2ull(result[1]);
          unsigned long long blockSize = hex2ull(result[2]);
-         unsigned long long endAddr = startAddr + blockSize;
          unsigned lineNo = match1 ? (unsigned)a2ull(result[4]) : 0;
          //cerr << "Match found: start=" << hex << startAddr << " blockSize=" << blockSize << " " << result[3] << ":" << lineNo << endl;
-         unsigned long long rss = pageMapReader ? pageMapReader->computeRssForAddrRange(startAddr, endAddr) : 0;
-         callSites.push_back(CallSite(startAddr, startAddr+blockSize, result[3], lineNo, rss));
+         callSites.push_back(CallSite(startAddr, startAddr+blockSize, result[3], lineNo));
          totalSize += blockSize;
          }
       else // try another pattern
          {
-         cerr << "No match for:" << line << endl;
-         exit(-1);
+         throw std::runtime_error("Unrecognized callsite at lineNum " + std::to_string(lineNum) + ":" + line);
          }
       }
    myfile.close();

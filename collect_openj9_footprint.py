@@ -432,6 +432,8 @@ def main() -> int:
             str(javacore_file),
             "-c",
             str(callsites_file),
+            "-i",
+            str(pid)
         ]
         log(f"Running footprintAnalysis command: {' '.join(footprint_cmd)}", level=2)
         footprint_result = run_command(

@@ -19,13 +19,14 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0 OR GPL-2.0 WITH Classpath-exception-2.0 OR LicenseRef-GPL-2.0 WITH Assembly-exception
  *******************************************************************************/
-#include <vector>
-#include <iostream>
-#include <unordered_map>
-#include <utility> // for std::pair
 #include <algorithm> // for sort
+#include <iostream>
+#include <stdexcept> // runtime_error
 #include <type_traits> // for is_same_v<>
 #include <unistd.h> // for getopt
+#include <unordered_map>
+#include <utility> // for std::pair
+#include <vector>
 #include "smap.hpp"
 #include "CallSites.hpp"
 #include "Util.hpp"
@@ -65,11 +66,15 @@ void annotateMapWithSegments(std::vector<MAPENTRY>&maps, const std::vector<T>& s
          else
             {
             // A class segment can span several smaps used for SCC.
-            // In this case we ignore the class segment.
+            // In this case we ignore the class segment. The RSS
+            // contribution will go enterely to the SCC category.
             if constexpr (std::is_same_v<T, J9Segment>)
                {
                if (map->getPurpose() == SmapEntry::SCC && seg->getSegmentType() == J9Segment::CLASS)
+                  {
+                  seg->setAccountedFor(true);
                   continue;
+                  }
                }
             cerr << "Overlapping range SEG:" << *seg << " and SMAP:" << *map << endl;
             map->addOverlappingRange(*seg);
@@ -149,16 +154,14 @@ unsigned long long printSpaceKBTakenBySharedLibraries(const vector<MAPENTRY> &sm
  * @param rssSize [OUT] Array with RSS contributions of each possible memory category
  */
 template <typename MAPENTRY>
-void computeProportionalRssContribution(const MAPENTRY &crtMap, bool usePageMap,
+void computeProportionalRssContribution(const MAPENTRY &crtMap,
+                                        PageMapReader *pageMapReader,
                                         unsigned long long virtualSize[], // output
-                                        unsigned long long rssSize[]) // output
+                                        unsigned long long rssSize[] // output
+                                        )
    {
    const list<const AddrRange*> &coveringRanges = crtMap.getCoveringRanges();
    const list<const AddrRange*> &overlapRanges = crtMap.getOverlappingRanges();
-   if (coveringRanges.size() != 0 && overlapRanges.size() != 0)
-      {
-      cerr << "Warning: smap starting at addr " << crtMap.getAddrRange().getStart() << " has both covering and overlapping ranges\n";
-      }
 
    unsigned long long totalCoveredSize = 0;
    // The following sums up the virtual size for each category covering this smap
@@ -171,13 +174,7 @@ void computeProportionalRssContribution(const MAPENTRY &crtMap, bool usePageMap,
       virtualSize[category] += size; // virtualSize[] sums up the virtual size of covering ranges for all smaps
       sz[category] += size; // sz[] sums up the virtual size of covering ranges for this smap
       totalCoveredSize += size;
-      if (usePageMap)
-         rssSize[category] += (*seg)->getRSS(); // rssSize[] sums up the RSS of covering ranges for all smaps
       } // end for
-   // When using the pageMap we already have the RSS for each category,
-   // so we can skip estimating the RSS using the proportional scheme based on virtual size
-   if (usePageMap)
-      return;
 
    // Determine if the smap is covered by more than one type of range
    int lastNonNullCategory = 0;
@@ -257,17 +254,16 @@ void computeProportionalRssContribution(const MAPENTRY &crtMap, bool usePageMap,
             //topTenPartiallyCovered.processElement(*crtMap);
             }
          }
-      else // This smap is not covered by anything and it does not overlap anything
-         {
-         rssSize[AddrRange::NOTCOVERED] += (crtMap.getResidentSizeKB() << 10);
-         virtualSize[AddrRange::NOTCOVERED] += crtMap.size();
-         }
       }
    }
 
 
 template <typename MAPENTRY>
-void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps, bool usePageMap)
+void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps, // From smap
+                                     const vector<J9Segment> &segments, // From javacore
+                                     const vector<ThreadStack> &threadStacks, // From javacore
+                                     const vector<CallSite> &callSites, // From coredump
+                                     PageMapReader *pageMapReader)
    {
    cout << "\nprintSpaceKBTakenByVmComponents...\n";
 
@@ -290,6 +286,11 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps, bool usePage
       {
       totalVirtSize += crtMap->size();
       totalRssSize += crtMap->getResidentSizeKB() << 10; // convert to bytes
+
+      if (crtMap->getCoveringRanges().size() != 0 && crtMap->getOverlappingRanges().size() != 0)
+         {
+         cerr << "Warning: smap starting at addr " << crtMap->getAddrRange().getStart() << " has both covering and overlapping ranges\n";
+         }
 
       // Check if shared library; these require some extra processing
       if (crtMap->getPurpose() == SmapEntry::DLL)
@@ -320,6 +321,9 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps, bool usePage
             break;
          case SmapEntry::STACK:
             addrRangeCategory = AddrRange::STACK;
+            // These are smaps dedicated to stack and are not shared with anythinf else.
+            // Note that we also have separate stacks for Java threads. Those can share
+            // the same smap with other categories, but they will not have a set purpose.
             break;
          case SmapEntry::JAVAHEAP:
             addrRangeCategory = AddrRange::JAVAHEAP;
@@ -334,18 +338,87 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps, bool usePage
           {
           virtualSize[addrRangeCategory] += crtMap->size();
           rssSize[addrRangeCategory] += crtMap->getResidentSizeKB() << 10;
+
+          // Mark all included segments as accounted for.
+          // Note that some CLASS segments can be included in the SCC smap.
+         const std::list<const AddrRange*> &coveringRanges = crtMap->getCoveringRanges();
+         for (auto seg = coveringRanges.cbegin(); seg != coveringRanges.cend(); ++seg)
+            {
+            (*seg)->setAccountedFor(true);
+            }
           continue; // These smaps are not shared with other categories
           }
 
-      // Determine whether a map is covered by ranges of different types and assign RSS in proportional values
-      // We can do a better job if we know for each page of the smap whether it is in RSS or not
-      computeProportionalRssContribution(*crtMap, usePageMap, virtualSize, rssSize);
-
-      if (crtMap->getCoveringRanges().size() == 0 &&
-          crtMap->getOverlappingRanges().size() == 0 &&
-          crtMap->getResidentSizeKB() != 0)
+      // The remaining smaps can be shared by several types of data structures.
+      // However, some smaps are not covered by anything. Exclude them from further processing.
+      if (crtMap->getCoveringRanges().size() == 0 && crtMap->getOverlappingRanges().size() == 0)
+         {
+         rssSize[AddrRange::NOTCOVERED] += (crtMap->getResidentSizeKB() << 10);
+         virtualSize[AddrRange::NOTCOVERED] += crtMap->size();
          topTenNotCovered.processElement(*crtMap);
+         continue;
+         }
+
+      // Determine whether a map is covered by ranges of different types and assign RSS in proportional values.
+      // We can do a better job if we know for each page of the smap whether it is in RSS or not.
+      if (!pageMapReader)
+         computeProportionalRssContribution(*crtMap, pageMapReader, virtualSize, rssSize);
       } // end for (iterate through smaps)
+
+   // If the pageMapReader is available, then, for each virtual range
+   // of the categories that can share a single smap, we can go page
+   // by page to determine its RSS contribution.
+   if (pageMapReader)
+      {
+      for (auto seg = segments.cbegin(); seg != segments.cend(); ++seg)
+         {
+         if (seg->isAccountedFor())
+            continue;
+         auto category = seg->getRangeCategory();
+         if (category == AddrRange::DATACACHE ||
+             category == AddrRange::SCRATCH ||
+             category == AddrRange::PERSIST ||
+             category == AddrRange::OTHER_INTERNAL ||
+             category == AddrRange::CLASS)
+            {
+            // Determine the RSS contribution.
+            if (seg->getRSS() == AddrRange::INVALID_RSS)
+               {
+               unsigned long long rss = pageMapReader->computeRssForAddrRange(seg->getStart(), seg->getEnd());
+               seg->setRSS(rss);
+               }
+            rssSize[category] += seg->getRSS();
+            virtualSize[category] += seg->size();
+            seg->setAccountedFor(true);
+            }
+
+         }
+      for (auto stackRegion = threadStacks.cbegin(); stackRegion != threadStacks.cend(); ++stackRegion)
+         {
+         // Determine the RSS contribution.
+         if (stackRegion->getRSS() == AddrRange::INVALID_RSS)
+            {
+            unsigned long long rss = pageMapReader->computeRssForAddrRange(stackRegion->getStart(), stackRegion->getEnd());
+            stackRegion->setRSS(rss);
+            }
+         rssSize[AddrRange::STACK] += stackRegion->getRSS();
+         virtualSize[AddrRange::STACK] += stackRegion->size();
+         stackRegion->setAccountedFor(true);
+         }
+      for (auto callSite = callSites.cbegin(); callSite != callSites.cend(); ++callSite)
+         {
+         // Determine the RSS contribution.
+         if (callSite->getRSS() == AddrRange::INVALID_RSS)
+            {
+            unsigned long long rss = pageMapReader->computeRssForAddrRange(callSite->getStart(), callSite->getEnd());
+            callSite->setRSS(rss);
+            }
+         rssSize[AddrRange::CALLSITE] += callSite->getRSS();
+         virtualSize[AddrRange::CALLSITE] += callSite->size();
+         callSite->setAccountedFor(true);
+         }
+      }
+
    cout << dec << endl;
    cout << "Totals:       Virtual= " << setw(8) << (totalVirtSize >> 10) << " KB; RSS= " << setw(8) << (totalRssSize >> 10) << " KB\n";
    for (int i = 0; i < AddrRange::NUM_CATEGORIES; i++)
@@ -413,12 +486,15 @@ int main(int argc, char* argv[])
    const char *smapsFilename = nullptr;
    int pid = 0;
    bool verbose = false;
-   while ((opt = getopt(argc, argv, "c:j:ps:v")) != -1)
+   while ((opt = getopt(argc, argv, "c:i:j:ps:v")) != -1)
       {
       switch (opt)
          {
          case 's':
             smapsFilename = optarg;
+            break;
+         case 'i':
+            pid = atoi(optarg);
             break;
          case 'j':
             javacoreFilename = optarg;
@@ -477,7 +553,7 @@ int main(int argc, char* argv[])
    if (callsitesFilename)
       {
       // Read the callsites file
-      readCallSitesFile(callsitesFilename, callSites, pageMapReader);
+      readCallSitesFile(callsitesFilename, callSites);
 
       // Annotate the smaps file with callsites
       annotateMapWithSegments(sMaps, callSites);
@@ -490,8 +566,7 @@ int main(int argc, char* argv[])
          map->printEntryWithAnnotations();
       }
 
-   bool usePageMap = pageMapReader != nullptr;
-   printSpaceKBTakenByVmComponents(sMaps, usePageMap);
+   printSpaceKBTakenByVmComponents(sMaps, segments, threadStacks, callSites, pageMapReader);
 
    // pageMapReader is not needed anymore
    if (pageMapReader)

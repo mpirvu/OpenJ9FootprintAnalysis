@@ -29,6 +29,8 @@
 class AddrRange
    {
    public:
+   static constexpr unsigned long long INVALID_RSS = 0xFFFFFFFFFFFFFFFFLL;
+
    enum RangeCategories
       {
       JAVAHEAP = 0,
@@ -52,10 +54,11 @@ class AddrRange
    private:
    unsigned long long _startAddr;
    unsigned long long _endAddr;
-   unsigned long long _rss = 0;
+   mutable unsigned long long _rss = INVALID_RSS;
+   mutable bool _accountedFor = false;
    public:
-      AddrRange() : _startAddr(0), _endAddr(0), _rss(0) {}
-      AddrRange(unsigned long long start, unsigned long long end, unsigned long long _rss) : _startAddr(start), _endAddr(end), _rss(_rss)
+      AddrRange() : _startAddr(0), _endAddr(0), _rss(INVALID_RSS), _accountedFor(false) {}
+      AddrRange(unsigned long long start, unsigned long long end) : _startAddr(start), _endAddr(end), _rss(INVALID_RSS), _accountedFor(false)
          {
          if (end <= start && !(start == 0 && end == 0))
             {
@@ -67,9 +70,11 @@ class AddrRange
       unsigned long long getRSS() const { return _rss; }
       void setStart(unsigned long long a){ _startAddr = a; }
       void setEnd(unsigned long long a) { _endAddr = a; }
-      void setRSS(unsigned long long rss) { _rss = rss; }
+      void setRSS(unsigned long long rss) const { _rss = rss; }
+      void setAccountedFor(bool accountedFor) const { _accountedFor = accountedFor; }
+      bool isAccountedFor() const { return _accountedFor; }
       virtual RangeCategories getRangeCategory() const { return UNKNOWN; }
-      virtual void clear() { _startAddr = _endAddr = 0; _rss = 0; }
+      virtual void clear() { _startAddr = _endAddr = 0; _rss = INVALID_RSS; _accountedFor = false; }
       bool includes(const AddrRange& other) const { return other._startAddr >= _startAddr && other._endAddr <= _endAddr; }
       bool disjoint(const AddrRange& other) const { return _endAddr <= other._startAddr || other._endAddr <= _startAddr; }
       unsigned long long size() const { return _endAddr - _startAddr; }

@@ -29,8 +29,8 @@ class CallSite : public AddrRange
    std::string        _filename;
    unsigned           _lineNo;
    public:
-      CallSite(unsigned long long startAddr, unsigned long long endAddr, const std::string& filename, int lineNo, unsigned long long rss) :
-         AddrRange(startAddr, endAddr, rss), _filename(filename), _lineNo(lineNo) {}
+      CallSite(unsigned long long startAddr, unsigned long long endAddr, const std::string& filename, int lineNo) :
+         AddrRange(startAddr, endAddr), _filename(filename), _lineNo(lineNo) {}
       virtual void clear()
          {
          AddrRange::clear();
@@ -43,7 +43,7 @@ class CallSite : public AddrRange
       virtual void print(std::ostream& os) const;
    }; //  AddrRange
 
-void readCallSitesFile(const char *filename, std::vector<CallSite>& callSites, PageMapReader *pageMapReader);
+void readCallSitesFile(const char *filename, std::vector<CallSite>& callSites);
 
 
 #endif // _CALLSITE_HPP__

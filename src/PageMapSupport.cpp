@@ -1,4 +1,4 @@
-// Support fo readinf /proc/PID/pagemap file and determining which pages are
+// Support fo reading /proc/PID/pagemap file and determining which pages are
 // present in physical memory
 #include <stdio.h>  // printf, snprintf
 #include <fcntl.h> // open, O_RDONLY
@@ -37,11 +37,11 @@ PageMapReader::PageMapReader(int pid): _pid(pid)
       throw std::runtime_error("cannot read page size with sysconf");
       }
 
-   // form filename
+   // Form filename
    snprintf(_pagemapPath, sizeof(_pagemapPath), "/proc/%d/pagemap", pid);
 
-   int pagemapfd = open(_pagemapPath, O_RDONLY);
-   if (pagemapfd < 0)
+   _pagemapfd = open(_pagemapPath, O_RDONLY);
+   if (_pagemapfd < 0)
       {
       std::cerr << "Cannot open pagemap file: " << _pagemapPath << std::endl;
       std::cerr << "Verify that PID exists and that we have read permission on the file." << std::endl;
@@ -77,7 +77,8 @@ unsigned long long PageMapReader::computeRssForAddrRange(unsigned long long star
       {
       if (endAddr <= startAligned + _pageSize)
          {
-         // The range si within the first page
+         // The given virtual memory range is entirely within the first page.
+         // Charge the exact virtual size to RSS consumption
          rss += endAddr - startAddr;
          return rss;
          }
