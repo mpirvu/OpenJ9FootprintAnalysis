@@ -421,6 +421,22 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps, // From smap
          }
       }
 
+   // Now sum-up virtual memory and RSS from all categories and substract
+   // from the total values computed for all smaps. The difference will be
+   // attributed to the UNKNOWN category.
+   unsigned long long accountedVirtualSize = 0;
+   unsigned long long accountedRssSize = 0;
+   for (int category = 0; category < AddrRange::NUM_CATEGORIES; category++)
+      {
+      accountedVirtualSize += virtualSize[category];
+      accountedRssSize += rssSize[category];
+      }
+   if (accountedVirtualSize < totalVirtSize)
+      virtualSize[AddrRange::UNKNOWN] += totalVirtSize - accountedVirtualSize;
+   if (accountedRssSize < totalRssSize)
+      rssSize[AddrRange::UNKNOWN] += totalRssSize - accountedRssSize;
+
+
    cout << dec << endl;
    cout << "Totals:       Virtual= " << setw(8) << (totalVirtSize >> 10) << " KB; RSS= " << setw(8) << (totalRssSize >> 10) << " KB\n";
    for (int i = 0; i < AddrRange::NUM_CATEGORIES; i++)
