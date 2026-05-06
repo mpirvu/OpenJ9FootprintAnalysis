@@ -351,6 +351,8 @@ void printSpaceKBTakenByVmComponents(const vector<MAPENTRY> &smaps, // From smap
 
       // The remaining smaps can be shared by several types of data structures.
       // However, some smaps are not covered by anything. Exclude them from further processing.
+      // Here's an example:  Prot=r--p /usr/lib/locale/locale-archive
+      // Here's another example: Prot=r--s /home/mpirvu/sdks/OpenJ9-JDK21-x86-64_linux-20260402-213720/lib/modules
       if (crtMap->getCoveringRanges().size() == 0 && crtMap->getOverlappingRanges().size() == 0)
          {
          rssSize[AddrRange::NOTCOVERED] += (crtMap->getResidentSizeKB() << 10);

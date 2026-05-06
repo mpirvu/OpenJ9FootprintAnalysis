@@ -8,6 +8,7 @@
 #include <string.h> // strerror
 #include <stdexcept> // runtime_error
 #include <iostream> // cerr
+#include <vector>
 #include "PageMapSupport.hpp"
 
 
@@ -66,52 +67,54 @@ unsigned long long PageMapReader::computeRssForAddrRange(unsigned long long star
    unsigned long long startAligned = startAddr & ~(_pageSize - 1);
    unsigned long long endAligned = (endAddr + _pageSize - 1) & ~(_pageSize - 1);
 
-   // Read the contribution of the first page which may not be entirely used by this AddrRange
-   pmd_t pmd;
-   if (pread(_pagemapfd, &pmd.pmd, sizeof(pmd.pmd), (off_t)((startAligned / _pageSize) * sizeof(pmd))) != sizeof(pmd))
+   // Find the number of pages in this interval. It's guaranteed to be at least 1.
+   unsigned long long numPages = (endAligned - startAligned)/_pageSize;
+
+   // Read the RSS presence of the pages in the given interval
+   std::vector<uint64_t> pageEntries(numPages);
+   const off_t pagemapOffset = (off_t)((startAligned / _pageSize) * sizeof(uint64_t));
+   const size_t bytesToRead = numPages * sizeof(uint64_t);
+   if (pread(_pagemapfd, pageEntries.data(), bytesToRead, pagemapOffset) != (ssize_t)bytesToRead)
       {
       // Is the process still alive?
       throw std::runtime_error("cannot read pagemap file: " + std::string(_pagemapPath) + std::string(strerror(errno)));
       }
+
+   pmd_t pmd;
+   auto itStart = pageEntries.begin();
+   // Process first page separately. The entire [startAddr, endAddr] could be in this page.
+   pmd.pmd = *itStart;
    if (pmd.pmd != 0 && pmd.present)
       {
       if (endAddr <= startAligned + _pageSize)
          {
          // The given virtual memory range is entirely within the first page.
-         // Charge the exact virtual size to RSS consumption
+         // Charge the exact virtual size to RSS consumption.
          rss += endAddr - startAddr;
          return rss;
          }
       else
          {
-         rss += startAligned + _pageSize - startAddr;
+         rss += (startAligned + _pageSize) - startAddr;
          }
       }
-   // Read the contribution of the last page which may not be entirely used by this AddrRange
-   if (pread(_pagemapfd, &pmd.pmd, sizeof(pmd.pmd), (off_t)(((endAligned - _pageSize) / _pageSize) * sizeof(pmd))) != sizeof(pmd))
-      {
-      // Is the process still alive?
-      throw std::runtime_error("cannot read pagemap file: " + std::string(_pagemapPath) + std::string(strerror(errno)));
-      }
+   // Here we know that the given range crosses a page boundary,
+   // and that there are at least two pages involved.
+   // Let's process the last page, which could be partial.
+   auto itEnd = pageEntries.end() - 1;
+   pmd.pmd = *itEnd;
    if (pmd.pmd != 0 && pmd.present)
       {
       rss += endAddr - (endAligned - _pageSize);
       }
-
-   // Read the contribution of all the other pages
-   for (unsigned long long i = startAligned + _pageSize; i < endAligned - _pageSize; i += _pageSize)
+   // Now let's process the remaining pages (except the first and last) which are full pages
+   for (auto it = itStart + 1; it < itEnd; ++it)
       {
-      pmd_t pmd;
-      // read at given offset
-      if (pread(_pagemapfd, &pmd.pmd, sizeof(pmd.pmd), (off_t)((i / _pageSize) * sizeof(pmd))) != sizeof(pmd))
-         {
-         // Is the process still alive?
-         throw std::runtime_error("cannot read pagemap file: " + std::string(_pagemapPath) + std::string(strerror(errno)));
-         }
+      pmd.pmd = *it;
       if (pmd.pmd != 0 && pmd.present)
          {
          rss += _pageSize;
          }
-      } // end for
+      }
    return rss;
    }

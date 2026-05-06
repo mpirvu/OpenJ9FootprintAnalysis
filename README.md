@@ -5,10 +5,14 @@ To compile:
 	make
 
 Manual analysis:
-	./footprintAnalysis.linux -s smapsFile -j javacoreFile -c callsitesFile
+	./footprintAnalysis.linux -s smapsFile -j javacoreFile -c callsitesFile -i PID
 
 Automated collection and analysis:
-	python3 collect_openj9_footprint.py PID
+	python3 collect_openj9_footprint.py -v PID
+
+Note: The JVM needs to be started with the following options:
+"-Dcom.ibm.dbgmalloc=true -Xdump:none -Xdump:system:events=user,file=/tmp/core.%pid.%seq.dmp -Xdump:java:events=user,file=/tmp/javacore.%pid.%seq.txt"
+
 
 The Python collector:
 - copies `/proc/PID/smaps` first
