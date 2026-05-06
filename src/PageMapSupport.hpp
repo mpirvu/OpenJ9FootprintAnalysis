@@ -3,7 +3,7 @@
 
 class PageMapReader
    {
-   int _pid; // PID of the process for which we want to rea the pagemap
+   int _pid; // PID of the process for which we want to read the pagemap
    long _pageSize; // page size of the system
    char _pagemapPath[64]; // buffer for holding the path to the pagemap file
    int _pagemapfd; // file descriptor for the pagemap file

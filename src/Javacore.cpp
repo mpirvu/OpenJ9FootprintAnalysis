@@ -102,7 +102,7 @@ void ThreadStack::print(std::ostream& os) const
       " size=" << setfill(' ') << std::dec << setw(5) << sizeKB() << " KB";
    }
 
-void javacoreParseStack(ifstream& myfile, int& lineNo, vector<ThreadStack>& threadStacks, PageMapReader *pageMapReader)
+void javacoreParseStack(ifstream& myfile, int& lineNo, vector<ThreadStack>& threadStacks)
    {
    string line;
    bool foundThreadDetailsSection = false;
@@ -121,11 +121,12 @@ void javacoreParseStack(ifstream& myfile, int& lineNo, vector<ThreadStack>& thre
       }
    string threadName;
 
-   const size_t hdrLen = strlen("3XMTHREADINFO ");
+   static const size_t hdrLen = strlen("3XMTHREADINFO ");
 
-   while (myfile.good())
+   static const std::regex  pattern("3XMTHREADINFO2\\s+\\(native stack address range from:0x([0-9A-F]+), to:0x([0-9A-F]+), size:0x([0-9A-F]+)");
+
+   while (std::getline(myfile, line))
       {
-      getline(myfile, line);
       lineNo++;
       if (line.find("1XMTHDSUMMARY  Threads CPU Usage Summary") != std::string::npos)
          return; // found the end of the thread section
@@ -158,7 +159,6 @@ void javacoreParseStack(ifstream& myfile, int& lineNo, vector<ThreadStack>& thre
          {
          // Search for "3XMTHREADINFO2            (native stack address range from:0x00007F17035D8000, to:0x00007F1703619000, size:0x41000)"
          std::cmatch result;
-         std::regex  pattern("3XMTHREADINFO2\\s+\\(native stack address range from:0x([0-9A-F]+), to:0x([0-9A-F]+), size:0x([0-9A-F]+)");
          if (std::regex_search(line.c_str(), result, pattern))
             {
             unsigned long long startAddr = hex2ull(result[1]);
@@ -170,8 +170,7 @@ void javacoreParseStack(ifstream& myfile, int& lineNo, vector<ThreadStack>& thre
                continue;
                }
 
-            unsigned long long rss = pageMapReader ? pageMapReader->computeRssForAddrRange(startAddr, endAddr) : 0;
-            threadStacks.push_back(ThreadStack(startAddr, endAddr, threadName, rss));
+            threadStacks.push_back(ThreadStack(startAddr, endAddr, threadName));
             }
          }
       }
@@ -190,8 +189,7 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
    // check if successfull
    if (!myfile.is_open())
       {
-      cerr << "Cannot open " << javacoreFilename << endl;
-      exit(-1);
+      throw std::runtime_error("Cannot open " + std::string(javacoreFilename));
       }
 
    // read each line from file
@@ -199,9 +197,8 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
    int lineNo = 0;
    bool memInfoFound = false;
    J9Segment::SegmentType segmentType = J9Segment::UNKNOWN;
-   while (myfile.good())
+   while (std::getline(myfile, line))
       {
-      getline(myfile, line);
       lineNo++;
 
       if (!memInfoFound)
@@ -246,7 +243,7 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
                cerr << "HEX_CONVERT_ERROR in javacore at line:" << lineNo << " : " << line << std::endl;
                exit(-1);
                }
-            segments.push_back(J9Segment(id, startAddr, endAddr, segmentType, 0, 0/*rss*/));
+            segments.push_back(J9Segment(id, startAddr, endAddr, segmentType, 0));
             }
          else if (line.find("1STSEGTYPE", 0) != std::string::npos)
             {
@@ -281,12 +278,7 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
                }
             unsigned flags = strtoul(tokens[5].c_str(), NULL, 16);
 
-            // For some segment types we may want to compute the RSS right here
-            unsigned long long rss = 0;
-            if (pageMapReader && (segmentType == J9Segment::CLASS || segmentType == J9Segment::DATACACHE || segmentType == J9Segment::INTERNAL))
-               rss = pageMapReader->computeRssForAddrRange(startAddr, endAddr);
-
-            segments.push_back(J9Segment(id, startAddr, endAddr, segmentType, flags, rss));
+            segments.push_back(J9Segment(id, startAddr, endAddr, segmentType, flags));
             }
          else if (line.find("1STGCHTYPE", 0) != std::string::npos)
             {
@@ -295,7 +287,7 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
             }
          }
       } // end while
-   javacoreParseStack(myfile, lineNo, threadStacks, pageMapReader);
+   javacoreParseStack(myfile, lineNo, threadStacks);
    myfile.close();
    cout << "Reading of segments from javacore file finished\n";
    }

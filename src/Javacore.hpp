@@ -51,8 +51,8 @@ class J9Segment : public  AddrRange
       static constexpr const char * const _segmentTypes[] = { "UNKNOWN", "JAVAHEAP", "INTERNAL", "CLASS", "CODECACHE", "DATACACHE" };
 
    public:
-      J9Segment(unsigned long long id, unsigned long long start, unsigned long long end, SegmentType segType, unsigned flags, unsigned long long rss) :
-         AddrRange(start, end, rss),  _id(id), _type(segType), _flags(flags) {}
+      J9Segment(unsigned long long id, unsigned long long start, unsigned long long end, SegmentType segType, unsigned flags) :
+         AddrRange(start, end),  _id(id), _type(segType), _flags(flags) {}
       const char *getTypeName() const { return _segmentTypes[_type]; }
       SegmentType getSegmentType() const { return _type; }
       unsigned getFlags() const { return _flags; }
@@ -78,8 +78,8 @@ class ThreadStack : public  AddrRange
       std::string _threadName;
 
    public:
-      ThreadStack(unsigned long long start, unsigned long long end, const std::string& threadName, unsigned long long rss) :
-         AddrRange(start, end, rss), _threadName(threadName) {}
+      ThreadStack(unsigned long long start, unsigned long long end, const std::string& threadName) :
+         AddrRange(start, end), _threadName(threadName) {}
       const std::string& getThreadName() const { return _threadName; }
       virtual void clear()
          {

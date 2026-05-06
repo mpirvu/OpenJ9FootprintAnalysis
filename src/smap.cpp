@@ -175,7 +175,7 @@ int parseSmapsMainLine(string line, SmapEntry &entry)
       {
       // Line starts with an address range
       std::cmatch result; //start    -  end        protection     offset      device major:minor   inode     file
-      std::regex pattern("([0-9a-f]+)-([0-9a-f]+) (\\S\\S\\S\\S) ([0-9a-f]+) ([0-9a-f]+:[0-9a-f]+) (\\d+)\\s*(\\S*)");
+      static const std::regex pattern("([0-9a-f]+)-([0-9a-f]+) (\\S\\S\\S\\S) ([0-9a-f]+) ([0-9a-f]+:[0-9a-f]+) (\\d+)\\s*(\\S*)");
 
       if (std::regex_search(line.c_str(), result, pattern))
          {
@@ -356,7 +356,7 @@ void printLargestUnallocatedBlocks(const vector<SmapEntry> &smaps)
          if (gapSize != 0)
             {
             totalGapSize += gapSize;
-            topTen.processElement(AddrRange(prevMap->getEnd(), crtMap->getStart(), 0 /*rss*/));
+            topTen.processElement(AddrRange(prevMap->getEnd(), crtMap->getStart()));
             }
          }
       }
