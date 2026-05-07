@@ -287,10 +287,10 @@ def send_sigquit(pid: int) -> None:
         raise CollectorError(f"Failed to send SIGQUIT to PID {pid}: {exc}") from exc
 
 
-def copy_dump_to_session(src: Path, dst_dir: Path, prefix: str, pid: int) -> Path:
-    # Copy dumps into the session directory so later analysis is independent of /tmp cleanup.
+def move_dump_to_session(src: Path, dst_dir: Path, prefix: str, pid: int) -> Path:
+    # Move dumps into the session directory so large files do not remain duplicated in /tmp.
     dst = dst_dir / f"{prefix}.pid{pid}{src.suffix or '.txt'}"
-    shutil.copy2(src, dst)
+    shutil.move(str(src), str(dst))
     return dst
 
 
@@ -446,9 +446,9 @@ def main() -> int:
         log(f"Detected new javacore: {javacore_src}")
         log(f"Detected new core: {core_src}")
 
-        javacore_file = copy_dump_to_session(javacore_src, session_dir, "javacore", pid)
-        core_file = copy_dump_to_session(core_src, session_dir, "core", pid)
-        log("Copied dumps into session directory")
+        javacore_file = move_dump_to_session(javacore_src, session_dir, "javacore", pid)
+        core_file = move_dump_to_session(core_src, session_dir, "core", pid)
+        log("Moved dumps into session directory")
 
         callsites_file = session_dir / f"callsites.pid{pid}.txt"
         jdmp_stderr = session_dir / "jdmpview.stderr.txt"
