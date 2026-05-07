@@ -76,6 +76,8 @@ class SmapEntry : public MemoryEntry
       SmapPurpose _purpose;
       //bool _mapForJavaHeap; // may turn to 'true' when we discover the smap is used for Java heap
    public:
+      static void setSccCachePath(const std::string &sccCachePath) { _sccCachePath = sccCachePath; }
+      static const std::string geSccCachePath() { return _sccCachePath; }
       SmapEntry() { clear(); }
       virtual void clear()
          {
@@ -88,9 +90,11 @@ class SmapEntry : public MemoryEntry
       void setPurpose(SmapPurpose purpose);
       bool isMapForSharedLibrary() const;
       bool isMapForThreadStack() const;
+      bool isMapForSCC() const;
    protected:
       virtual void print(std::ostream& os) const;
    private:
+      inline static std::string _sccCachePath;
       inline static bool endsWith(const std::string & str, const std::string & suffix)
          {
          return suffix.size() <= str.size() && std::equal(suffix.rbegin(), suffix.rend(), str.rbegin());

@@ -174,7 +174,8 @@ int parseSmapsMainLine(string line, SmapEntry &entry)
    try
       {
       // Line starts with an address range
-      std::cmatch result; //start    -  end        protection     offset      device major:minor   inode     file
+      // 7f957b000000-7f957b001000 rw-s 00000000 fd:00 269418052                  /opt/IBM/OL-25.0.0.6/liberty/usr/servers/.classCache/C290M17F1A64P_liberty-root_G45L00
+      std::cmatch result;              //start    -  end        protection     offset      device major:minor   inode     file
       static const std::regex pattern("([0-9a-f]+)-([0-9a-f]+) (\\S\\S\\S\\S) ([0-9a-f]+) ([0-9a-f]+:[0-9a-f]+) (\\d+)\\s*(\\S*)");
 
       if (std::regex_search(line.c_str(), result, pattern))
@@ -186,11 +187,9 @@ int parseSmapsMainLine(string line, SmapEntry &entry)
          entry._details.assign(result[7]);
          if (entry.isMapForSharedLibrary())
             entry.setPurpose(SmapEntry::DLL);
-         if (entry.isMapForThreadStack())
+         else if (entry.isMapForThreadStack())
             entry.setPurpose(SmapEntry::STACK);
-         if (entry.getDetailsString().find("javasharedresources") != string::npos || // found
-             entry.getDetailsString().find("classCache") != string::npos ||
-             entry.getDetailsString().find(".scc") != string::npos)
+         else if (entry.isMapForSCC())
             entry.setPurpose(SmapEntry::SCC);
          return 0;
          }
@@ -433,6 +432,12 @@ bool SmapEntry::isMapForSharedLibrary() const
 bool SmapEntry::isMapForThreadStack() const
    {
    return (getDetailsString().find("[stack") == 0); // check if it starts with [stack
+   }
+
+//---------------------------------------------------------------
+bool SmapEntry::isMapForSCC() const
+   {
+   return !_sccCachePath.empty() && getDetailsString() == _sccCachePath;
    }
 
 //--------------------------------------------------------

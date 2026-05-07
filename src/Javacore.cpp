@@ -102,6 +102,41 @@ void ThreadStack::print(std::ostream& os) const
       " size=" << setfill(' ') << std::dec << setw(5) << sizeKB() << " KB";
    }
 
+void javacoreParseSCC(ifstream& myfile, int& lineNo, std::string &sccCachePath)
+   {
+   string line;
+   bool sharedClassesSectionFound = false;
+   while (std::getline(myfile, line))
+      {
+      lineNo++;
+      if (!sharedClassesSectionFound)
+         {
+         // Continue to search for the beginning of the SCC section
+         if (line.find("SHARED CLASSES subcomponent dump routine") != std::string::npos)
+            sharedClassesSectionFound = true;
+         continue;
+         }
+      if (line.find("0SECTION") != std::string::npos)
+         {
+         // This is the last section we are interested in
+         break;
+         }
+      //2SCLTEXTCMDT           acmeairscc                    CR                       Memory mapped file       /tmp/C290M17F1A64P_acmeairscc_G45L00
+      size_t pos = line.find("Memory mapped file");
+      if (pos != std::string::npos)
+         {
+         std::string tail = line.substr(pos + strlen("Memory mapped file"));
+         vector<string> tokens;
+         tokenize(tail, tokens);
+         if (!tokens.empty())
+            {
+            sccCachePath = tokens[0];
+            break;
+            }
+         }
+      }
+   }
+
 void javacoreParseStack(ifstream& myfile, int& lineNo, vector<ThreadStack>& threadStacks)
    {
    string line;
@@ -180,7 +215,7 @@ void javacoreParseStack(ifstream& myfile, int& lineNo, vector<ThreadStack>& thre
  * Read the javacore file and extract the memory segments and thread stacks
  * The output is stored in the segments and threadStacks vectors
 */
-void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, vector<ThreadStack>& threadStacks, PageMapReader *pageMapReader)
+void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, vector<ThreadStack>& threadStacks, string& sccCachePath)
    {
    cout << "Reading javacore file: " << string(javacoreFilename) << endl;
    // Open the file
@@ -288,6 +323,8 @@ void readJavacore(const char * javacoreFilename, vector<J9Segment>& segments, ve
          }
       } // end while
    javacoreParseStack(myfile, lineNo, threadStacks);
+   javacoreParseSCC(myfile, lineNo, sccCachePath);
+   // Note that if the SCC section is not present, we will reach the end of the file
    myfile.close();
    cout << "Reading of segments from javacore file finished\n";
    }
