@@ -502,6 +502,7 @@ int main(int argc, char* argv[])
    const char *javacoreFilename = nullptr;
    const char *callsitesFilename = nullptr;
    const char *smapsFilename = nullptr;
+   std::string sccCachePath;
    int pid = 0;
    bool verbose = false;
    while ((opt = getopt(argc, argv, "c:i:j:ps:v")) != -1)
@@ -541,7 +542,23 @@ int main(int argc, char* argv[])
    // If PID is given, open the page map file
    PageMapReader *pageMapReader = pid ? new PageMapReader(pid) : nullptr;
 
-   // Read the smaps file
+
+   //===================== Javacore processing ============================
+   // This needs to be done before smaps processing because it computes
+   // the mapped file name for SCC
+   vector<J9Segment> segments; // must not become out-of-scope until I am done with the maps
+   vector<ThreadStack> threadStacks;
+
+   readJavacore(javacoreFilename, segments, threadStacks, sccCachePath);
+   SmapEntry::setSccCachePath(sccCachePath);
+   cout << "Found SCC file path: " << sccCachePath << std::endl;
+#ifdef DEBUG
+   // let's print all segments
+   cout << "Print segments:\n";
+   for (vector<J9Segment>::iterator it = segments.begin(); it != segments.end(); ++it)
+      cout << *it << endl;
+#endif
+   //====================== smaps file processing ======================
    vector<MapEntry> sMaps;
 #ifdef WINDOWS_FOOTPRINT
    readVmmapFile(smapsFilename, sMaps);
@@ -549,19 +566,6 @@ int main(int argc, char* argv[])
    readSmapsFile(smapsFilename, sMaps);
 #endif
 
-
-
-   //===================== Javacore processing ============================
-   vector<J9Segment> segments; // must not become out-of-scope until I am done with the maps
-   vector<ThreadStack> threadStacks;
-
-   readJavacore(javacoreFilename, segments, threadStacks, pageMapReader);
-#ifdef DEBUG
-   // let's print all segments
-   cout << "Print segments:\n";
-   for (vector<J9Segment>::iterator it = segments.begin(); it != segments.end(); ++it)
-      cout << *it << endl;
-#endif
    // Annotate maps with j9segments
    annotateMapWithSegments(sMaps, segments);
    annotateMapWithThreadStacks(sMaps, threadStacks);

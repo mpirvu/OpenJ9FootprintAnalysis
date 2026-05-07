@@ -93,7 +93,7 @@ class ThreadStack : public  AddrRange
    }; // J9Segment
 
 J9Segment::SegmentType determineSegmentType(const std::string& line);
-void readJavacore(const char * javacoreFilename, std::vector<J9Segment>& segments, std::vector<ThreadStack>& threadStacks, PageMapReader *pagemapReader);
+void readJavacore(const char * javacoreFilename, std::vector<J9Segment>& segments, std::vector<ThreadStack>& threadStacks, std::string& sccCachePath);
 
 
 #endif // _J9_SEGMENT_HPP__
