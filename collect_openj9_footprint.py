@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -41,6 +42,13 @@ DEFAULT_DUMP_DIR = Path("/tmp")
 DEFAULT_WAIT_TIMEOUT = 300 # Max value to wait for javacore/coredump to be generated (in seconds)
 DEFAULT_STABLE_SECONDS = 5
 DEFAULT_POLL_INTERVAL = 1.0
+
+CALLSITE_SEGMENT_RE = re.compile(
+    r"^\s*!j9x\s+(0x[0-9A-Fa-f]+),0x[0-9A-Fa-f]+\s+.*segment\.c:\d+\s*$"
+)
+JAVACORE_1STSEGMENT_RE = re.compile(
+    r"^1STSEGMENT\s+0x[0-9A-Fa-f]+\s+(0x[0-9A-Fa-f]+)\s+0x[0-9A-Fa-f]+\s+0x[0-9A-Fa-f]+\s+0x[0-9A-Fa-f]+\s+0x[0-9A-Fa-f]+\s*$"
+)
 
 
 @dataclass
@@ -279,10 +287,10 @@ def send_sigquit(pid: int) -> None:
         raise CollectorError(f"Failed to send SIGQUIT to PID {pid}: {exc}") from exc
 
 
-def copy_dump_to_session(src: Path, dst_dir: Path, prefix: str, pid: int) -> Path:
-    # Copy dumps into the session directory so later analysis is independent of /tmp cleanup.
+def move_dump_to_session(src: Path, dst_dir: Path, prefix: str, pid: int) -> Path:
+    # Move dumps into the session directory so large files do not remain duplicated in /tmp.
     dst = dst_dir / f"{prefix}.pid{pid}{src.suffix or '.txt'}"
-    shutil.copy2(src, dst)
+    shutil.move(str(src), str(dst))
     return dst
 
 
@@ -297,6 +305,38 @@ def resolve_footprint_binary(path_arg: Optional[str]) -> Path:
     if not os.access(binary, os.X_OK):
         raise CollectorError(f"footprintAnalysis binary is not executable: {binary}")
     return binary.resolve()
+
+
+def parse_javacore_segment_starts(javacore_file: Path) -> set[str]:
+    # Collect the segment start addresses from 1STSEGMENT lines in the javacore.
+    segment_starts: set[str] = set()
+
+    for line in javacore_file.read_text(encoding="utf-8").splitlines():
+        match = JAVACORE_1STSEGMENT_RE.match(line)
+        if match:
+            segment_starts.add(match.group(1).lower())
+
+    return segment_starts
+
+
+def filter_callsites_file(callsites_file: Path, javacore_file: Path) -> int:
+    # Remove only those segment.c callsite records whose allocation start address
+    # matches the start address of a segment reported in the javacore.
+    segment_starts = parse_javacore_segment_starts(javacore_file)
+    removed = 0
+    kept_lines: List[str] = []
+
+    for line in callsites_file.read_text(encoding="utf-8").splitlines(keepends=True):
+        match = CALLSITE_SEGMENT_RE.match(line)
+        if match and match.group(1).lower() in segment_starts:
+            removed += 1
+            continue
+        kept_lines.append(line)
+
+    if removed:
+        callsites_file.write_text("".join(kept_lines), encoding="utf-8")
+
+    return removed
 
 
 def parse_args() -> argparse.Namespace:
@@ -406,9 +446,9 @@ def main() -> int:
         log(f"Detected new javacore: {javacore_src}")
         log(f"Detected new core: {core_src}")
 
-        javacore_file = copy_dump_to_session(javacore_src, session_dir, "javacore", pid)
-        core_file = copy_dump_to_session(core_src, session_dir, "core", pid)
-        log("Copied dumps into session directory")
+        javacore_file = move_dump_to_session(javacore_src, session_dir, "javacore", pid)
+        core_file = move_dump_to_session(core_src, session_dir, "core", pid)
+        log("Moved dumps into session directory")
 
         callsites_file = session_dir / f"callsites.pid{pid}.txt"
         jdmp_stderr = session_dir / "jdmpview.stderr.txt"
@@ -421,6 +461,14 @@ def main() -> int:
             raise CollectorError(
                 f"jdmpview failed with exit code {jdmp_result.returncode}; see {jdmp_stderr}"
             )
+
+        removed_callsites = filter_callsites_file(callsites_file, javacore_file)
+        if removed_callsites:
+            log(
+                f"Filtered {removed_callsites} segment.c callsite entries matched to javacore 1STSEGMENT starts"
+            )
+        else:
+            log("No javacore-matched segment.c callsite entries found to filter", level=2)
 
         footprint_output = session_dir / f"footprintAnalysis.pid{pid}.txt"
         footprint_stderr = session_dir / "footprintAnalysis.stderr.txt"
